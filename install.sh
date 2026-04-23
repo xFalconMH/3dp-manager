@@ -476,7 +476,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASS}
       POSTGRES_DB: 3dp_manager
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d 3dp_manager"]
       interval: 5s
@@ -587,7 +587,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASS}
       POSTGRES_DB: 3dp_manager
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d 3dp_manager"]
       interval: 5s
