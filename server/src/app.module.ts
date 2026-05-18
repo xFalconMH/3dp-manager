@@ -22,6 +22,8 @@ import { ClientModule } from './client/client.module';
 import { TunnelsModule } from './tunnels/tunnels.module';
 import { Tunnel } from './tunnels/entities/tunnel.entity';
 import { SessionModule } from './session/session.module';
+import { Node } from './nodes/entities/node.entity';
+import { NodesModule } from './nodes/nodes.module';
 
 @Module({
   imports: [
@@ -41,7 +43,7 @@ import { SessionModule } from './session/session.module';
       username: process.env.DB_USERNAME,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
-      entities: [Setting, Domain, Subscription, Inbound, Tunnel],
+      entities: [Setting, Domain, Subscription, Inbound, Tunnel, Node],
       synchronize: true,
     }),
     SessionModule,
@@ -54,6 +56,7 @@ import { SessionModule } from './session/session.module';
     AuthModule,
     ClientModule,
     TunnelsModule,
+    NodesModule,
   ],
   controllers: [AppController],
   providers: [

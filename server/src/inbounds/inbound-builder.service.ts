@@ -422,6 +422,45 @@ export class InboundBuilderService {
     };
   }
 
+  buildHysteria2Inbound(params: { port: number; uuid: string; sni: string }) {
+    const { port, uuid, sni } = params;
+    return {
+      enable: true,
+      port,
+      protocol: 'hysteria2',
+      remark: 'hysteria2-udp',
+      settings: JSON.stringify({
+        clients: [
+          {
+            password: uuid,
+            email: uuid,
+            enable: true,
+            limitIp: 0,
+            totalGB: 0,
+            expiryTime: 0,
+            reset: 0,
+          },
+        ],
+        masquerade: `${sni}:443`,
+      }),
+      streamSettings: JSON.stringify({
+        network: 'udp',
+        security: 'tls',
+        tlsSettings: {
+          serverName: sni,
+          alpn: ['h3'],
+        },
+      }),
+      sniffing: JSON.stringify({
+        enabled: false,
+        destOverride: ['http', 'tls', 'quic'],
+        metadataOnly: false,
+        routeOnly: false,
+      }),
+    };
+  }
+
+
   generateUuid() {
     return uuidv4();
   }
@@ -447,6 +486,9 @@ export class InboundBuilderService {
         break;
       case 'trojan':
         link = this.buildTrojanLink(inbound, sni, idOrPass);
+        break;
+      case 'hysteria2':
+        link = this.buildHysteria2PanelLink(inbound, sni, idOrPass, flagEmoji);
         break;
     }
 
@@ -592,6 +634,25 @@ export class InboundBuilderService {
       `&sid=${sid}` +
       `&spx=${spx}` +
       `#${this.flag}%20${inbound.remark || ''}`
+    );
+  }
+
+  private buildHysteria2PanelLink(
+    inbound: XuiInboundRaw,
+    serverAddress: string,
+    password: string,
+    flagEmoji: string,
+  ) {
+    const stream = JSON.parse(inbound.streamSettings) as {
+      tlsSettings?: { serverName?: string };
+    };
+    const params = new URLSearchParams();
+    params.set('insecure', '0');
+    params.set('sni', stream.tlsSettings?.serverName || serverAddress);
+
+    return (
+      `hy2://${password}@${serverAddress}:${inbound.port}/?${params.toString()}` +
+      `#${flagEmoji}%20${encodeURIComponent(inbound.remark || '')}`
     );
   }
 

@@ -4,8 +4,14 @@ import { Repository } from 'typeorm';
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import * as https from 'https';
 import { Setting } from '../settings/entities/setting.entity';
-import { XuiResponse, XuiCertResult, XuiInboundRaw } from './xui.types';
+import {
+  XuiResponse,
+  XuiCertResult,
+  XuiInboundRaw,
+  XuiDiscoveredNode,
+} from './xui.types';
 import { SessionService } from '../session/session.service';
+import { Node, NodeAuthType } from '../nodes/entities/node.entity';
 
 interface LoginResponse {
   success: boolean;
@@ -36,11 +42,69 @@ export class XuiService {
     });
   }
 
+  private getNodeBaseUrl(node: Node): string {
+    if (node.url) {
+      return node.url.replace(/\/+$/, '');
+    }
+
+    return `${node.protocol}://${node.host}:${node.port}`.replace(/\/+$/, '');
+  }
+
   private async getSettings() {
     const settings = await this.settingsRepo.find();
     const config: Record<string, string> = {};
     settings.forEach((s) => (config[s.key] = s.value));
     return config;
+  }
+
+  private createApi(baseURL?: string): AxiosInstance {
+    return axios.create({
+      baseURL,
+      timeout: 15000,
+      httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+      withCredentials: true,
+    });
+  }
+
+  private async createAuthenticatedApi(node?: Node): Promise<AxiosInstance | null> {
+    if (!node) {
+      const success = await this.login();
+      return success ? this.api : null;
+    }
+
+    const api = this.createApi(this.getNodeBaseUrl(node));
+
+    if (node.authType === NodeAuthType.Token) {
+      if (!node.token) return null;
+      api.defaults.headers.common.Authorization = `Bearer ${node.token}`;
+      return api;
+    }
+
+    if (!node.login || !node.password) return null;
+
+    const res = await api.post<LoginResponse>('/login', {
+      username: node.login,
+      password: node.password,
+    });
+
+    if (!res.data?.success || !res.headers['set-cookie']) {
+      return null;
+    }
+
+    api.defaults.headers.common.Cookie = res.headers['set-cookie'].join('; ');
+    return api;
+  }
+
+  private parseVersion(headers: Record<string, unknown>, data: unknown): string | undefined {
+    const headerVersion = headers['x-ui-version'] || headers['x-3x-ui-version'];
+    if (typeof headerVersion === 'string') return headerVersion;
+
+    if (data && typeof data === 'object' && 'version' in data) {
+      const version = (data as { version?: unknown }).version;
+      return typeof version === 'string' ? version : undefined;
+    }
+
+    return undefined;
   }
 
   async login() {
@@ -79,6 +143,7 @@ export class XuiService {
 
   async addInbound(
     inboundConfig: { port: number; [key: string]: unknown } | XuiInboundRaw,
+    node?: Node,
   ): Promise<number | null> {
     let attempts = 0;
     const maxAttempts = 3;
@@ -89,7 +154,13 @@ export class XuiService {
       attempts++;
 
       try {
-        const res = await this.api.post<XuiResponse<{ id: number }>>(
+        const api = await this.createAuthenticatedApi(node);
+        if (!api) {
+          this.logger.error('3x-ui authentication failed before addInbound');
+          return null;
+        }
+
+        const res = await api.post<XuiResponse<{ id: number }>>(
           '/panel/api/inbounds/add',
           inboundConfig,
         );
@@ -122,7 +193,7 @@ export class XuiService {
         const error = e as AxiosError;
         if (error.response?.status === 401) {
           this.logger.log('Сессия истекла, пробуем релогин...');
-          if (await this.login()) {
+          if (!node && (await this.login())) {
             return this.addInbound(inboundConfig);
           }
         }
@@ -140,9 +211,11 @@ export class XuiService {
     return null;
   }
 
-  async deleteInbound(id: number) {
+  async deleteInbound(id: number, node?: Node) {
     try {
-      await this.api.post(`/panel/api/inbounds/del/${id}`);
+      const api = await this.createAuthenticatedApi(node);
+      if (!api) return;
+      await api.post(`/panel/api/inbounds/del/${id}`);
       this.logger.debug(`Инбаунд ${id} удален`);
     } catch (e) {
       const error = e as AxiosError;
@@ -187,9 +260,32 @@ export class XuiService {
     return false;
   }
 
-  async getNewX25519Cert(): Promise<XuiCertResult | null> {
+  async checkNodeConnection(
+    node: Node,
+  ): Promise<{ success: boolean; version?: string }> {
     try {
-      const res = await this.api.get<XuiResponse<XuiCertResult>>(
+      const api = await this.createAuthenticatedApi(node);
+      if (!api) return { success: false };
+
+      const res = await api.get('/panel/api/inbounds/list');
+      return {
+        success: true,
+        version: this.parseVersion(res.headers as Record<string, unknown>, res.data),
+      };
+    } catch (error) {
+      const axiosError = error as AxiosError;
+      this.logger.error(
+        `Node connection error: ${axiosError.message} (${node.name})`,
+      );
+      return { success: false };
+    }
+  }
+
+  async getNewX25519Cert(node?: Node): Promise<XuiCertResult | null> {
+    try {
+      const api = await this.createAuthenticatedApi(node);
+      if (!api) return null;
+      const res = await api.get<XuiResponse<XuiCertResult>>(
         '/panel/api/server/getNewX25519Cert',
       );
       if (res.data?.success && res.data.obj) return res.data.obj;
@@ -197,5 +293,25 @@ export class XuiService {
       this.logger.error('Ошибка получения ключей Reality');
     }
     return null;
+  }
+
+  async getNodes(node: Node): Promise<XuiDiscoveredNode[]> {
+    try {
+      const api = await this.createAuthenticatedApi(node);
+      if (!api) return [];
+
+      const res = await api.get<XuiResponse<XuiDiscoveredNode[]>>(
+        '/panel/api/nodes/list',
+      );
+
+      if (res.data?.success && Array.isArray(res.data.obj)) {
+        return res.data.obj;
+      }
+    } catch (error) {
+      const axiosError = error as AxiosError;
+      this.logger.warn(`Node sync is not available: ${axiosError.message}`);
+    }
+
+    return [];
   }
 }

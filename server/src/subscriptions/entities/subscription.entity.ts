@@ -5,8 +5,11 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  ManyToOne,
 } from 'typeorm';
 import { Inbound } from '../../inbounds/entities/inbound.entity';
+import { Node } from '../../nodes/entities/node.entity';
+import { Tunnel } from '../../tunnels/entities/tunnel.entity';
 
 @Entity()
 export class Subscription {
@@ -31,7 +34,24 @@ export class Subscription {
     port?: number | string;
     sni?: string;
     link?: string;
+    nodeId?: string;
+    relayServerId?: number;
   }>;
+
+  @Column({ nullable: true })
+  nodeId?: string;
+
+  @ManyToOne(() => Node, (node) => node.subscriptions, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  node?: Node;
+
+  @Column({ nullable: true })
+  relayServerId?: number;
+
+  @ManyToOne(() => Tunnel, { nullable: true, onDelete: 'SET NULL' })
+  relayServer?: Tunnel;
 
   @OneToMany(() => Inbound, (inbound) => inbound.subscription)
   inbounds: Inbound[];

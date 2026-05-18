@@ -4,6 +4,9 @@ import {
   ValidateNested,
   IsOptional,
   IsBoolean,
+  IsUUID,
+  IsInt,
+  ValidateIf,
   ArrayMinSize,
   ArrayMaxSize,
 } from 'class-validator';
@@ -23,6 +26,15 @@ export class InboundConfigDto {
   @IsString()
   @IsOptional()
   link?: string;
+
+  @IsUUID()
+  @IsOptional()
+  nodeId?: string;
+
+  @ValidateIf((dto: InboundConfigDto) => dto.relayServerId !== undefined)
+  @Type(() => Number)
+  @IsInt()
+  relayServerId?: number;
 }
 
 export class CreateSubscriptionDto {
@@ -40,4 +52,13 @@ export class CreateSubscriptionDto {
   @IsBoolean()
   @IsOptional()
   isAutoRotationEnabled?: boolean;
+
+  @IsUUID()
+  @IsOptional()
+  nodeId?: string;
+
+  @ValidateIf((dto: CreateSubscriptionDto) => dto.relayServerId !== undefined)
+  @Type(() => Number)
+  @IsInt()
+  relayServerId?: number;
 }

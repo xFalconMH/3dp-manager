@@ -14,18 +14,30 @@ export class SshService {
       privateKey?: string;
     },
     command: string,
+    timeoutMs = 120000,
   ): Promise<string> {
     return new Promise((resolve, reject) => {
       const conn = new Client();
+      let timer: NodeJS.Timeout | undefined;
+
+      const finish = (callback: () => void) => {
+        if (timer) clearTimeout(timer);
+        conn.end();
+        callback();
+      };
 
       conn
         .on('ready', () => {
           this.logger.debug(`SSH Connection established to ${config.host}`);
+          this.logger.debug(`Executing SSH command: ${command}`);
+
+          timer = setTimeout(() => {
+            finish(() => reject(new Error(`SSH command timeout after ${timeoutMs}ms`)));
+          }, timeoutMs);
 
           conn.exec(command, (err, stream) => {
             if (err) {
-              conn.end();
-              return reject(err);
+              return finish(() => reject(err));
             }
 
             let output = '';
@@ -33,9 +45,10 @@ export class SshService {
             stream
               .on('close', (code, _signal) => {
                 this.logger.debug(`SSH Command finished with code ${code}`);
-                conn.end();
-                if (code === 0) resolve(output);
-                else reject(new Error(`Exit code ${code}. Output: ${output}`));
+                finish(() => {
+                  if (code === 0) resolve(output);
+                  else reject(new Error(`Exit code ${code}. Output: ${output}`));
+                });
               })
               .on('data', (data: Buffer) => {
                 output += data.toString();
@@ -47,6 +60,7 @@ export class SshService {
         })
         .on('error', (err) => {
           this.logger.error(`SSH Error: ${err.message}`);
+          if (timer) clearTimeout(timer);
           reject(err);
         })
         .connect({
