@@ -1,21 +1,39 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Box, Button, Typography, Paper, Table, TableBody, TableCell,
-  TableHead, TableRow, IconButton, Dialog, DialogTitle,
-  DialogContent, TextField, DialogActions, Chip, CircularProgress,
-  useTheme,
-  useMediaQuery,
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControl,
-  RadioGroup,
   FormControlLabel,
+  IconButton,
+  InputLabel,
+  MenuItem,
+  Paper,
   Radio,
+  RadioGroup,
+  Select,
   Snackbar,
-  Alert
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  TextField,
+  Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
-import { Delete, Add, Terminal, CheckCircle, Error, Dns } from '@mui/icons-material';
+import { Add, CheckCircle, Delete, Dns, Error, Terminal } from '@mui/icons-material';
 import api from '../api';
 import { getApiErrorMessage } from '../utils/errorHandlers';
 import { Logger } from '../utils/logger';
+import type { NodeRecord } from '../types/node';
 
 interface Tunnel {
   id: number;
@@ -24,83 +42,104 @@ interface Tunnel {
   sshPort: number;
   username: string;
   isInstalled: boolean;
+  nodeId?: string;
+  node?: NodeRecord;
 }
+
+const emptyForm = {
+  name: '',
+  nodeId: '',
+  sshPort: 22,
+  username: 'root',
+  password: '',
+  privateKey: '',
+  domain: '',
+};
 
 export default function TunnelsPage() {
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
+  const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [open, setOpen] = useState(false);
   const [loadingId, setLoadingId] = useState<number | null>(null);
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [authMethod, setAuthMethod] = useState<'password' | 'key'>('password');
-
-  const [form, setForm] = useState({
-    name: '', ip: '', sshPort: 22, username: 'root', password: '', privateKey: '', domain: ''
+  const [form, setForm] = useState(emptyForm);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    type: 'success' as 'success' | 'error',
+    message: '',
+  });
+  const [confirmDialog, setConfirmDialog] = useState({
+    open: false,
+    title: '',
+    confirmText: 'Подтвердить',
+    confirmColor: 'primary' as 'primary' | 'error',
+    onConfirm: () => { },
   });
 
-  // Snackbar state for notifications
-  const [snackbar, setSnackbar] = useState({ open: false, type: 'success' as 'success' | 'error', message: '' });
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const mainNode = useMemo(() => nodes.find((node) => node.isMain), [nodes]);
 
-  // Confirmation dialog state
-  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', onConfirm: () => {} });
+  const loadData = useCallback(async () => {
+    try {
+      const [tunnelsRes, nodesRes] = await Promise.all([
+        api.get<Tunnel[]>('/tunnels'),
+        api.get<NodeRecord[]>('/nodes'),
+      ]);
+      setTunnels(tunnelsRes.data);
+      setNodes(nodesRes.data);
+    } catch (error) {
+      Logger.error('Failed to load forwarding data', 'Tunnels', error);
+    }
+  }, []);
 
-  // Form validation errors
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const getNodeAddress = (node?: NodeRecord) => {
+    if (!node?.url) return '';
+    try {
+      return new URL(node.url).hostname;
+    } catch {
+      return node.url;
+    }
+  };
+
+  const selectedNode = nodes.find((node) => node.id === form.nodeId) || mainNode;
 
   const validateForm = () => {
     const errors: Record<string, string> = {};
 
-    if (!form.name.trim()) {
-      errors.name = 'Введите название сервера';
-    }
-
-    if (!form.ip.trim()) {
-      errors.ip = 'Введите IP адрес';
-    } else {
-      // IPv4 validation
-      const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-      // IPv6 basic validation
-      const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^([0-9a-fA-F]{1,4}:){1,7}:$|^([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}$|^([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}$|^([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}$|^([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}$|^([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}$|^[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})$|^:((:[0-9a-fA-F]{1,4}){1,7}|:)$/;
-      
-      if (!ipv4Regex.test(form.ip) && !ipv6Regex.test(form.ip)) {
-        errors.ip = 'Неверный формат IP адреса';
-      }
-    }
-
+    if (!form.name.trim()) errors.name = 'Введите название relay сервера';
+    if (!selectedNode) errors.nodeId = 'Добавьте или выберите ноду';
     if (!form.sshPort || form.sshPort < 1 || form.sshPort > 65535) {
       errors.sshPort = 'Порт должен быть от 1 до 65535';
     }
-
-    if (!form.username.trim()) {
-      errors.username = 'Введите SSH пользователя';
-    }
-
-    if (authMethod === 'password' && !form.password) {
-      errors.password = 'Введите SSH пароль';
-    }
-
-    if (authMethod === 'key' && !form.privateKey.trim()) {
-      errors.privateKey = 'Введите SSH ключ';
-    } else if (authMethod === 'key' && !form.privateKey.includes('-----BEGIN')) {
-      errors.privateKey = 'Неверный формат SSH ключа';
-    }
+    if (!form.username.trim()) errors.username = 'Введите SSH пользователя';
+    if (authMethod === 'password' && !form.password) errors.password = 'Введите SSH пароль';
+    if (authMethod === 'key' && !form.privateKey.trim()) errors.privateKey = 'Введите SSH ключ';
 
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
-  const loadTunnels = useCallback(async () => {
-    try {
-      Logger.debug('Loading tunnels...', 'Tunnels');
-      const { data } = await api.get('/tunnels');
-      setTunnels(data);
-      Logger.debug(`Loaded ${data.length} tunnels`, 'Tunnels');
-    } catch (error) {
-      Logger.error('Failed to load', 'Tunnels', error);
-    }
-  }, []);
+  const handleChange =
+    (prop: keyof typeof emptyForm) => (event: ChangeEvent<HTMLInputElement>) => {
+      setForm((prev) => ({ ...prev, [prop]: event.target.value }));
+    };
 
-  useEffect(() => { loadTunnels(); }, [loadTunnels]);
+  const resetForm = () => {
+    setForm({ ...emptyForm, nodeId: mainNode?.id || '' });
+    setAuthMethod('password');
+    setFormErrors({});
+  };
+
+  const openCreate = () => {
+    resetForm();
+    setOpen(true);
+  };
 
   const handleCreate = async () => {
     if (!validateForm()) {
@@ -110,67 +149,77 @@ export default function TunnelsPage() {
 
     const payload = {
       ...form,
-      password: authMethod === 'password' ? form.password : null,
-      privateKey: authMethod === 'key' ? form.privateKey : null,
+      nodeId: form.nodeId || mainNode?.id,
+      password: authMethod === 'password' ? form.password : undefined,
+      privateKey: authMethod === 'key' ? form.privateKey : undefined,
     };
 
-    Logger.debug(`Creating tunnel`, 'Tunnels', { name: form.name, ip: form.ip });
     await api.post('/tunnels', payload);
-    Logger.debug('Tunnel created successfully', 'Tunnels');
     setOpen(false);
-    setForm({ name: '', ip: '', sshPort: 22, username: 'root', password: '', privateKey: '', domain: '' });
-    setAuthMethod('password');
-    setFormErrors({});
-    loadTunnels();
-    setSnackbar({ open: true, type: 'success', message: 'Сервер добавлен' });
+    resetForm();
+    loadData();
+    setSnackbar({ open: true, type: 'success', message: 'Relay сервер добавлен' });
   };
 
-  const handleDelete = async (id: number) => {
+  const handleInstall = (id: number) => {
     setConfirmDialog({
       open: true,
-      title: 'Удалить сервер из списка?',
+      title: 'Установить перенаправление на выбранный сервер?',
+      confirmText: 'Установить',
+      confirmColor: 'primary',
       onConfirm: async () => {
-        Logger.debug(`Deleting tunnel ID: ${id}`, 'Tunnels');
-        await api.delete(`/tunnels/${id}`);
-        Logger.debug(`Deleted tunnel ID: ${id}`, 'Tunnels');
-        loadTunnels();
-        setSnackbar({ open: true, type: 'success', message: 'Сервер удалён' });
-      }
-    });
-  };
-
-  const handleInstall = async (id: number) => {
-    setConfirmDialog({
-      open: true,
-      title: 'Начать установку перенаправления на этот сервер?',
-      onConfirm: async () => {
-        Logger.debug(`Installing forwarding on tunnel ID: ${id}`, 'Tunnels');
         setLoadingId(id);
         try {
           await api.post(`/tunnels/${id}/install`);
-          Logger.debug('Forwarding installed successfully', 'Tunnels');
-          setSnackbar({ open: true, type: 'success', message: 'Скрипт успешно установлен! Трафик перенаправляется.' });
-          loadTunnels();
-        } catch (e) {
-          const message = getApiErrorMessage(e, 'Неизвестная ошибка');
-          Logger.error(`Install error on ID ${id}: ${message}`, 'Tunnels');
-          setSnackbar({ open: true, type: 'error', message: 'Ошибка: ' + message });
+          setSnackbar({ open: true, type: 'success', message: 'Перенаправление установлено' });
+          loadData();
+        } catch (error) {
+          setSnackbar({ open: true, type: 'error', message: getApiErrorMessage(error, 'Ошибка установки') });
         } finally {
           setLoadingId(null);
         }
-      }
+      },
     });
   };
 
-  const handleChange = useCallback((prop: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm(prev => ({ ...prev, [prop]: e.target.value }));
-  }, []);
+  const handleDelete = (tunnel: Tunnel) => {
+    const deleteForwarding =
+      tunnel.isInstalled &&
+      window.confirm('Удалить перенаправление на сервере через forwarding_delete.sh?');
+
+    setConfirmDialog({
+      open: true,
+      title: deleteForwarding
+        ? 'Удалить relay и выполнить удаление перенаправления на сервере?'
+        : 'Удалить relay сервер только из списка?',
+      confirmText: 'Удалить',
+      confirmColor: 'error',
+      onConfirm: async () => {
+        setLoadingId(tunnel.id);
+        try {
+          await api.delete(`/tunnels/${tunnel.id}`, {
+            params: { deleteForwarding },
+          });
+          setSnackbar({ open: true, type: 'success', message: 'Relay сервер удалён' });
+          loadData();
+        } catch (error) {
+          setSnackbar({ open: true, type: 'error', message: getApiErrorMessage(error, 'Ошибка удаления') });
+        } finally {
+          setLoadingId(null);
+        }
+      },
+    });
+  };
 
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
         <Typography variant={isMobile ? 'h5' : 'h4'}>Relay серверы</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={() => setOpen(true)}>Добавить</Button>
+        <Box>
+          <Button variant="contained" startIcon={<Add />} onClick={openCreate}>
+            Добавить
+          </Button>
+        </Box>
       </Box>
 
       <Paper sx={{ overflowX: 'auto' }}>
@@ -178,65 +227,62 @@ export default function TunnelsPage() {
           <TableHead>
             <TableRow>
               <TableCell>Название</TableCell>
+              <TableCell>Нода</TableCell>
               <TableCell>Адрес</TableCell>
               <TableCell>Статус</TableCell>
               <TableCell align="right">Действия</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {tunnels.map((t) => (
-              <TableRow key={t.id}>
-                <TableCell>{t.name}</TableCell>
+            {tunnels.map((tunnel) => (
+              <TableRow key={tunnel.id}>
+                <TableCell>{tunnel.name}</TableCell>
+                <TableCell>{tunnel.node?.name || '-'}</TableCell>
                 <TableCell>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Dns fontSize="small" color="action" />
-                    {t.ip}
+                    {tunnel.ip}
                   </Box>
                 </TableCell>
                 <TableCell>
-                  {!isMobile && (t.isInstalled ?
-                    <Chip icon={<CheckCircle />} label={"Активен"} color="success" size="small" variant="outlined" /> :
-                    <Chip icon={<Error />} label={"Не настроен"} color="warning" size="small" variant="outlined" />
-                  )}
-                  {isMobile && (t.isInstalled ?
-                    <CheckCircle color='success' /> :
-                    <Error color='warning' />
+                  {tunnel.isInstalled ? (
+                    <Chip icon={<CheckCircle />} label="Активен" color="success" size="small" variant="outlined" />
+                  ) : (
+                    <Chip icon={<Error />} label="Не установлен" color="warning" size="small" variant="outlined" />
                   )}
                 </TableCell>
                 <TableCell align="right">
-                  {!t.isInstalled && (
-                    <>
-                      {isMobile ? (
-                        <IconButton disabled={loadingId !== null} color="primary" onClick={() => handleInstall(t.id)}>
-                          {loadingId === t.id ? <CircularProgress size={20} /> : <Terminal />}
-                        </IconButton>
-                      ) : (
-                        <Button
-                          startIcon={loadingId === t.id ? <CircularProgress size={20} /> : <Terminal />}
-                          disabled={loadingId !== null}
-                          onClick={() => handleInstall(t.id)}
-                          sx={{ mr: 1 }}
-                          variant="outlined"
-                          size="small"
-                        >
-                          {isMobile ? '' : (loadingId === t.id ? 'Установка...' : 'Установить')}
-                        </Button>
-                      )}
-                    </>
+                  {!tunnel.isInstalled && (
+                    <Button
+                      startIcon={loadingId === tunnel.id ? <CircularProgress size={20} /> : <Terminal />}
+                      disabled={loadingId !== null}
+                      onClick={() => handleInstall(tunnel.id)}
+                      sx={{ mr: 1 }}
+                      variant="outlined"
+                      size="small"
+                    >
+                      Установить
+                    </Button>
                   )}
-                  <IconButton color="inherit" onClick={() => handleDelete(t.id)}>
+                  <IconButton color="error" disabled={loadingId !== null} onClick={() => handleDelete(tunnel)}>
                     <Delete />
                   </IconButton>
                 </TableCell>
               </TableRow>
             ))}
-            {tunnels.length === 0 && <TableRow><TableCell colSpan={4} align="center" sx={{ color: 'text.secondary' }}>Нет серверов</TableCell></TableRow>}
+            {tunnels.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} align="center" sx={{ color: 'text.secondary' }}>
+                  Relay серверы не добавлены
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </Paper>
 
-      <Dialog open={open} onClose={() => setOpen(false)}>
-        <DialogTitle>Новый редирект сервер</DialogTitle>
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Новый relay сервер</DialogTitle>
         <DialogContent>
           <TextField
             margin="dense"
@@ -247,19 +293,36 @@ export default function TunnelsPage() {
             error={!!formErrors.name}
             helperText={formErrors.name}
           />
+          <FormControl fullWidth margin="dense" error={!!formErrors.nodeId}>
+            <InputLabel>Нода</InputLabel>
+            <Select
+              value={form.nodeId || mainNode?.id || ''}
+              label="Нода"
+              onChange={(event) => setForm((prev) => ({ ...prev, nodeId: event.target.value }))}
+            >
+              {nodes.map((node) => (
+                <MenuItem key={node.id} value={node.id}>
+                  {node.name}{node.isMain ? ' (основная)' : ''}
+                </MenuItem>
+              ))}
+            </Select>
+            {formErrors.nodeId && (
+              <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.5 }}>
+                {formErrors.nodeId}
+              </Typography>
+            )}
+          </FormControl>
           <TextField
             margin="dense"
-            label="IP адрес"
+            label="IP из URL ноды"
             fullWidth
-            value={form.ip}
-            onChange={handleChange('ip')}
-            error={!!formErrors.ip}
-            helperText={formErrors.ip}
+            value={getNodeAddress(selectedNode)}
+            slotProps={{ input: { readOnly: true } }}
           />
           <Box sx={{ display: 'flex', gap: 2 }}>
             <TextField
               margin="dense"
-              label="SSH Порт"
+              label="SSH порт"
               type="number"
               fullWidth
               value={form.sshPort}
@@ -269,7 +332,7 @@ export default function TunnelsPage() {
             />
             <TextField
               margin="dense"
-              label="SSH User"
+              label="SSH пользователь"
               fullWidth
               value={form.username}
               onChange={handleChange('username')}
@@ -287,7 +350,7 @@ export default function TunnelsPage() {
           {authMethod === 'password' ? (
             <TextField
               margin="dense"
-              label="SSH Пароль"
+              label="SSH пароль"
               type="password"
               fullWidth
               value={form.password}
@@ -298,13 +361,13 @@ export default function TunnelsPage() {
           ) : (
             <TextField
               margin="dense"
-              label="SSH Private Key (RSA / Ed25519)"
+              label="SSH private key"
               multiline
               rows={4}
               fullWidth
               value={form.privateKey}
               onChange={handleChange('privateKey')}
-              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
+              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
               slotProps={{ input: { style: { fontFamily: 'monospace', fontSize: '0.875rem' } } }}
               error={!!formErrors.privateKey}
               helperText={formErrors.privateKey}
@@ -317,7 +380,6 @@ export default function TunnelsPage() {
         </DialogActions>
       </Dialog>
 
-      {/* Confirmation Dialog */}
       <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ ...confirmDialog, open: false })}>
         <DialogTitle>Подтверждение</DialogTitle>
         <DialogContent>
@@ -327,29 +389,24 @@ export default function TunnelsPage() {
           <Button onClick={() => setConfirmDialog({ ...confirmDialog, open: false })}>Отмена</Button>
           <Button
             onClick={() => {
-              confirmDialog.onConfirm();
               setConfirmDialog({ ...confirmDialog, open: false });
+              confirmDialog.onConfirm();
             }}
             variant="contained"
-            color="error"
+            color={confirmDialog.confirmColor}
           >
-            Подтвердить
+            {confirmDialog.confirmText}
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar notifications */}
       <Snackbar
         open={snackbar.open}
         autoHideDuration={6000}
         onClose={() => setSnackbar({ ...snackbar, open: false })}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
-        <Alert
-          onClose={() => setSnackbar({ ...snackbar, open: false })}
-          severity={snackbar.type}
-          sx={{ width: '100%' }}
-        >
+        <Alert onClose={() => setSnackbar({ ...snackbar, open: false })} severity={snackbar.type} sx={{ width: '100%' }}>
           {snackbar.message}
         </Alert>
       </Snackbar>

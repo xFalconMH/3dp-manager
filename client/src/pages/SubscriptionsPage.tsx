@@ -9,20 +9,27 @@ import {
   Menu,
   ListItemIcon,
   ListItemText,
-  Checkbox
+  Checkbox,
+  Stack,
+  Chip,
+  Divider,
+  Tooltip
 } from '@mui/material';
-import { Delete, Add, Link as LinkIcon, OpenInNew, ContentCopy, Dns, Router, Edit, MoreVert, Remove, Refresh } from '@mui/icons-material';
+import { Delete, Add, Link as LinkIcon, OpenInNew, ContentCopy, Dns, Router, Edit, MoreVert, Remove, Refresh, PauseCircleFilled, PlayCircleFilled } from '@mui/icons-material';
 import api from '../api';
 import { copyToClipboard } from '../utils/copyToClipboard';
 import { Logger } from '../utils/logger';
+import type { NodeRecord } from '../types/node';
 
 interface Subscription {
   id: string;
   name: string;
   uuid: string;
   inbounds: unknown[];
-  inboundsConfig?: unknown[];
+  inboundsConfig?: InboundConfigUI[];
   isAutoRotationEnabled?: boolean;
+  nodeId?: string;
+  relayServerId?: number;
 }
 
 interface Tunnel {
@@ -31,6 +38,7 @@ interface Tunnel {
   ip: string;
   domain: string;
   isInstalled: boolean;
+  nodeId?: string;
 }
 
 interface InboundConfigUI {
@@ -39,6 +47,8 @@ interface InboundConfigUI {
   port: string;
   sni: string;
   link?: string;
+  nodeId?: string;
+  relayServerId?: string;
 }
 
 interface Domain { id: number; name: string; }
@@ -95,10 +105,17 @@ const getSubscriptionUrl = (uuid: string, tunnelId: string | number) => {
 export default function SubscriptionsPage() {
   const [subs, setSubs] = useState<Subscription[]>([]);
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
+  const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [selectedServer, setSelectedServer] = useState<string | number>('main');
   const [menuAnchorEl, setMenuAnchorEl] = useState<null | HTMLElement>(null);
   const [activeSub, setActiveSub] = useState<Subscription | null>(null);
   const [domains, setDomains] = useState<Domain[]>([]);
+  const [rotationSettings, setRotationSettings] = useState({
+    rotation_interval: '30',
+    rotation_status: 'active',
+    last_rotation_timestamp: '',
+  });
+  const [rotationLoading, setRotationLoading] = useState(false);
   const openActionMenu = Boolean(menuAnchorEl);
 
   // Состояния модального окна конструктора
@@ -135,9 +152,16 @@ export default function SubscriptionsPage() {
       setTunnels(tunnelsRes.data.filter((el: Tunnel) => el.isInstalled));
       Logger.debug(`Loaded ${tunnelsRes.data.filter((el: Tunnel) => el.isInstalled).length} active tunnels`, 'Subs');
 
+      const nodesRes = await api.get<NodeRecord[]>('/nodes');
+      setNodes(nodesRes.data);
+      Logger.debug(`Loaded ${nodesRes.data.length} nodes`, 'Subs');
+
       const allDomains = await api.get('/domains/all');
       setDomains(allDomains.data);
       Logger.debug(`Loaded ${allDomains.data.length} domains`, 'Subs');
+
+      const settingsRes = await api.get('/settings');
+      setRotationSettings((prev) => ({ ...prev, ...settingsRes.data }));
     } catch (error) {
       Logger.error('Failed to load', 'Subs', error);
       throw error;
@@ -185,7 +209,9 @@ export default function SubscriptionsPage() {
         type: i.type || 'vless-tcp-reality',
         port: i.port ? i.port.toString() : 'random',
         sni: i.sni || 'random',
-        link: i.link || ''
+        link: i.link || '',
+        nodeId: i.nodeId || '',
+        relayServerId: i.relayServerId ? i.relayServerId.toString() : ''
       })));
     } else {
       setInbounds([{ id: generateId(), type: 'vless-tcp-reality', port: 'random', sni: 'random', link: '' }]);
@@ -196,7 +222,18 @@ export default function SubscriptionsPage() {
   };
 
   const handleInboundChange = (id: string, field: keyof InboundConfigUI, value: string) => {
-    setInbounds(prev => prev.map(inb => inb.id === id ? { ...inb, [field]: value } : inb));
+    setInbounds(prev => prev.map(inb => {
+      if (inb.id !== id) return inb;
+      const next = { ...inb, [field]: value };
+      if (field === 'nodeId') {
+        next.relayServerId = '';
+      }
+      if (field === 'type' && value === 'custom') {
+        next.nodeId = '';
+        next.relayServerId = '';
+      }
+      return next;
+    }));
     if (field === 'port' || (field === 'type' && value === 'custom')) {
       setPortErrors(prev => { const n = { ...prev }; delete n[id]; return n; });
     }
@@ -246,12 +283,17 @@ export default function SubscriptionsPage() {
       name,
       inboundsConfig: inbounds.map(i => {
         if (i.type === 'custom') {
-          return { type: i.type, link: i.link };
+          return {
+            type: i.type,
+            link: i.link,
+          };
         }
         return {
           type: i.type,
           port: i.port === 'random' ? 'random' : parseInt(i.port),
-          sni: i.sni
+          sni: i.sni,
+          nodeId: i.nodeId || undefined,
+          relayServerId: i.relayServerId ? parseInt(i.relayServerId, 10) : undefined
         };
       })
     };
@@ -335,6 +377,95 @@ export default function SubscriptionsPage() {
     });
   };
 
+  const saveRotationSettings = async (nextSettings = rotationSettings) => {
+    await api.post('/settings', nextSettings);
+    setRotationSettings(nextSettings);
+  };
+
+  const toggleRotationService = async () => {
+    const nextStatus = rotationSettings.rotation_status === 'stopped' ? 'active' : 'stopped';
+    const nextSettings = { ...rotationSettings, rotation_status: nextStatus };
+    try {
+      await saveRotationSettings(nextSettings);
+      setSnackbar({
+        open: true,
+        type: 'success',
+        message: nextStatus === 'active' ? 'Ротация включена' : 'Ротация остановлена'
+      });
+    } catch (error) {
+      Logger.error('Rotation status update error', 'Subs', error);
+      setSnackbar({ open: true, type: 'error', message: 'Не удалось изменить статус ротации' });
+    }
+  };
+
+  const saveRotationInterval = async () => {
+    const interval = parseInt(rotationSettings.rotation_interval, 10);
+    if (Number.isNaN(interval) || interval < 10) {
+      setSnackbar({ open: true, type: 'error', message: 'Минимальный интервал ротации — 10 минут' });
+      return;
+    }
+
+    try {
+      await saveRotationSettings(rotationSettings);
+      setSnackbar({ open: true, type: 'success', message: 'Интервал ротации сохранён' });
+    } catch (error) {
+      Logger.error('Rotation interval update error', 'Subs', error);
+      setSnackbar({ open: true, type: 'error', message: 'Не удалось сохранить интервал' });
+    }
+  };
+
+  const rotateAllNow = async () => {
+    setConfirmDialog({
+      open: true,
+      title: 'Сгенерировать инбаунды сейчас для всех активных подписок?',
+      confirmText: 'Сгенерировать',
+      confirmColor: 'primary',
+      onConfirm: async () => {
+        try {
+          setRotationLoading(true);
+          const { data } = await api.post('/rotation/rotate-all');
+          setSnackbar({
+            open: true,
+            type: data?.success ? 'success' : 'error',
+            message: data?.message || 'Ротация завершена'
+          });
+          loadSubs();
+        } catch (error: unknown) {
+          const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Ошибка ротации';
+          setSnackbar({ open: true, type: 'error', message });
+        } finally {
+          setRotationLoading(false);
+        }
+      }
+    });
+  };
+
+  const formatRotationDate = (value: string) => {
+    if (!value) return 'Нет данных';
+    return new Date(Number(value)).toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const getNextRotationDate = () => {
+    if (rotationSettings.rotation_status === 'stopped') return 'Пауза';
+    if (!rotationSettings.last_rotation_timestamp) return 'Ожидание';
+
+    const interval = parseInt(rotationSettings.rotation_interval, 10) || 30;
+    const next = new Date(Number(rotationSettings.last_rotation_timestamp) + interval * 60000);
+    return next.toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   const showLinks = (sub: Subscription) => {
     let links: string[] = [];
     if (selectedServer === 'main') {
@@ -355,6 +486,13 @@ export default function SubscriptionsPage() {
   const handleCopyLink = async (uuid: string, tunnelId: string | number) => {
     await copyToClipboard(getSubscriptionUrl(uuid, tunnelId));
     setSnackbar({ open: true, type: 'success', message: 'Ссылка на подписку скопирована' });
+  };
+
+  const getDefaultNodeId = () => nodes.find((node) => node.isMain)?.id || '';
+
+  const getRelayOptions = (inboundNodeId?: string) => {
+    const effectiveNodeId = inboundNodeId || getDefaultNodeId();
+    return tunnels.filter((tunnel) => tunnel.nodeId === effectiveNodeId);
   };
 
   return (
@@ -387,6 +525,56 @@ export default function SubscriptionsPage() {
           <Button variant="contained" startIcon={<Add />} onClick={handleOpenCreate}>Создать</Button>
         </Box>
       </Box>
+
+      <Paper sx={{ p: 2, mb: 3 }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ xs: 'stretch', md: 'center' }}>
+          <Box>
+            <Typography variant="subtitle2" color="text.secondary">Статус ротации</Typography>
+            <Chip
+              icon={rotationSettings.rotation_status === 'stopped' ? <PauseCircleFilled /> : <PlayCircleFilled />}
+              label={rotationSettings.rotation_status === 'stopped' ? 'Остановлена' : 'Активна'}
+              color={rotationSettings.rotation_status === 'stopped' ? 'warning' : 'success'}
+              size="small"
+              variant="outlined"
+              sx={{ mt: 1 }}
+            />
+          </Box>
+          <Box>
+          <Tooltip title={rotationSettings.rotation_status === 'stopped' ? "Возобновить ротацию" : "Поставить на паузу"}>
+            <IconButton
+              onClick={toggleRotationService}
+              size="small"
+            >
+              {rotationSettings.rotation_status === 'stopped' ? <PlayCircleFilled fontSize="large" /> : <PauseCircleFilled fontSize="large" />}
+            </IconButton>
+          </Tooltip>
+          </Box>
+          <Divider flexItem orientation={isMobile ? 'horizontal' : 'vertical'} />
+          <Box>
+            <Typography variant="subtitle2" color="text.secondary">Последняя генерация</Typography>
+            <Typography variant="body2" sx={{ mt: 1 }}>{formatRotationDate(rotationSettings.last_rotation_timestamp)}</Typography>
+          </Box>
+          <Box>
+            <Typography variant="subtitle2" color="text.secondary">Следующая генерация</Typography>
+            <Typography variant="body2" sx={{ mt: 1 }}>{getNextRotationDate()}</Typography>
+          </Box>
+          <TextField
+            label="Интервал, мин"
+            type="number"
+            size="small"
+            value={rotationSettings.rotation_interval}
+            onChange={(e) => setRotationSettings((prev) => ({ ...prev, rotation_interval: e.target.value }))}
+            sx={{ width: { xs: '100%', md: 150 } }}
+          />
+          <Box sx={{ flexGrow: 1 }} />
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            <Button variant="outlined" onClick={saveRotationInterval}>Сохранить интервал</Button>
+            <Button variant="contained" loading={rotationLoading} onClick={rotateAllNow}>
+              Обновить все
+            </Button>
+          </Stack>
+        </Stack>
+      </Paper>
 
       <Paper sx={{ overflowX: 'auto' }}>
         <Table>
@@ -497,7 +685,7 @@ export default function SubscriptionsPage() {
           <TextField
             autoFocus margin="dense" label="Имя подписки" fullWidth
             value={name} onChange={(e) => setName(e.target.value)}
-            sx={{ mb: 4 }}
+            sx={{ mb: 2 }}
           />
 
           <Typography variant="h6" sx={{ mb: 2 }}>
@@ -534,6 +722,38 @@ export default function SubscriptionsPage() {
                 </FormControl>
               ) : (
                 <>
+                  <FormControl size="small" sx={{ minWidth: 170 }}>
+                    <InputLabel>Нода</InputLabel>
+                    <Select
+                      value={inb.nodeId || ''}
+                      label="Нода"
+                      onChange={(e) => handleInboundChange(inb.id, 'nodeId', e.target.value)}
+                    >
+                      <MenuItem value="">Основная нода</MenuItem>
+                      {nodes.map((node) => (
+                        <MenuItem key={node.id} value={node.id}>
+                          {node.name}{node.isMain ? ' (основная)' : ''}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  <FormControl size="small" sx={{ minWidth: 170 }}>
+                    <InputLabel>Relay</InputLabel>
+                    <Select
+                      value={inb.relayServerId || ''}
+                      label="Relay"
+                      onChange={(e) => handleInboundChange(inb.id, 'relayServerId', e.target.value)}
+                    >
+                      <MenuItem value="">Без relay</MenuItem>
+                      {getRelayOptions(inb.nodeId).map((tunnel) => (
+                        <MenuItem key={tunnel.id} value={tunnel.id.toString()}>
+                          {tunnel.name}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
                   <FormControl size="small" sx={{ minWidth: 150 }}>
                     <TextField
                       size="small"

@@ -11,6 +11,7 @@ import NotFoundPage from './pages/NotFoundPage';
 import { AxiosInterceptor } from './auth/AxiosInterceptor';
 import PublicRoute from './auth/PublicRoute';
 import TunnelsPage from './pages/TunnelsPage';
+import NodesPage from './pages/NodesPage';
 
 function App() {
   return (
@@ -31,6 +32,7 @@ function App() {
               <Route index element={<SubscriptionsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="domains" element={<DomainsPage />} />
+              <Route path="nodes" element={<NodesPage />} />
               <Route path="tunnels" element={<TunnelsPage />} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
