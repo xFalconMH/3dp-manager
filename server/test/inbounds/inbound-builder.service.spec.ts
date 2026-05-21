@@ -270,6 +270,50 @@ describe('InboundBuilderService', () => {
     });
   });
 
+  describe('buildHysteria2Inbound', () => {
+    it('creates 3x-ui hysteria v2 inbound with certificate paths', () => {
+      const result = service.buildHysteria2Inbound({
+        port: 34443,
+        uuid: 'test-auth',
+        sni: 'oil.3dp-manager.com',
+      });
+
+      expect(result).toMatchObject({
+        enable: true,
+        listen: '0.0.0.0',
+        port: 34443,
+        protocol: 'hysteria',
+        tag: 'inbound-34443',
+      });
+
+      const settings = JSON.parse(result.settings);
+      const streamSettings = JSON.parse(result.streamSettings);
+
+      expect(settings.clients[0].auth).toBe('test-auth');
+      expect(settings.version).toBe(2);
+      expect(streamSettings.network).toBe('hysteria');
+      expect(streamSettings.hysteriaSettings.version).toBe(2);
+      expect(streamSettings.finalmask.udp[0].type).toBe('salamander');
+      expect(streamSettings.tlsSettings.certificates[0].certificateFile).toBe(
+        '/etc/letsencrypt/live/oil.3dp-manager.com/fullchain.pem',
+      );
+      expect(streamSettings.tlsSettings.certificates[0].keyFile).toBe(
+        '/etc/letsencrypt/live/oil.3dp-manager.com/privkey.pem',
+      );
+
+      const link = service.buildInboundLink(
+        result as any,
+        'relay.example.com',
+        'fallback-auth',
+        '%F0%9F%92%AF',
+      );
+      expect(link).toContain('hy2://test-auth@relay.example.com:34443/');
+      expect(link).toContain('sni=oil.3dp-manager.com');
+      expect(link).toContain('obfs=salamander');
+      expect(link).toContain('obfs-password=abcd1234');
+    });
+  });
+
   describe('buildInboundLink', () => {
     const baseInbound = {
       protocol: 'vless',

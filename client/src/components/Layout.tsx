@@ -1,9 +1,17 @@
 import {
-  Toolbar, Drawer, List, ListItem,
-  ListItemButton, ListItemIcon, ListItemText, Box, useMediaQuery, useTheme
+  Box,
+  Drawer,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Toolbar,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
-import { People, Settings, Dns, SwapHoriz } from '@mui/icons-material';
-import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import { Dns, Hub, People, Settings, SwapHoriz } from '@mui/icons-material';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 
 import Header from './Header';
@@ -12,6 +20,14 @@ import SecurityWarning from './SecurityWarning';
 import { useSecureConnection } from '../utils/useSecureConnection';
 
 const drawerWidth = 240;
+
+const menuItems = [
+  { text: 'Подписки', icon: <People />, path: '/' },
+  { text: 'Ноды', icon: <Hub />, path: '/nodes' },
+  { text: 'Relay серверы', icon: <SwapHoriz />, path: '/tunnels' },
+  { text: 'Домены', icon: <Dns />, path: '/domains' },
+  { text: 'Настройки', icon: <Settings />, path: '/settings' },
+];
 
 export default function Layout() {
   const navigate = useNavigate();
@@ -22,15 +38,8 @@ export default function Layout() {
   const { isSecure } = useSecureConnection();
 
   const handleDrawerToggle = () => {
-    setMobileOpen(!mobileOpen);
+    setMobileOpen((prev) => !prev);
   };
-
-  const menuItems = [
-    { text: 'Подписки', icon: <People />, path: '/' },
-    { text: 'Домены', icon: <Dns />, path: '/domains' },
-    { text: 'Перенаправление', icon: <SwapHoriz />, path: '/tunnels' },
-    { text: 'Настройки', icon: <Settings />, path: '/settings' },
-  ];
 
   const drawerContent = (
     <Box sx={{ overflow: 'auto' }}>
@@ -38,7 +47,7 @@ export default function Layout() {
       <List>
         {menuItems.map((item) => (
           <ListItem key={item.text} disablePadding>
-            <ListItemButton 
+            <ListItemButton
               selected={location.pathname === item.path}
               onClick={() => {
                 navigate(item.path);
@@ -56,11 +65,10 @@ export default function Layout() {
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', width: '100%' }}>
-      {/* Передаем функцию открытия в Header */}
       <Header onMenuClick={handleDrawerToggle} isMobile={isMobile} />
 
       <Drawer
-        variant={isMobile ? "temporary" : "permanent"}
+        variant={isMobile ? 'temporary' : 'permanent'}
         open={isMobile ? mobileOpen : true}
         onClose={handleDrawerToggle}
         sx={{
@@ -72,15 +80,15 @@ export default function Layout() {
         {drawerContent}
       </Drawer>
 
-      <Box 
-        component="main" 
-        sx={{ 
-          flexGrow: 1, 
+      <Box
+        component="main"
+        sx={{
+          flexGrow: 1,
           display: 'flex',
           flexDirection: 'column',
           minHeight: '100vh',
           width: '100%',
-          overflowX: 'hidden'
+          overflowX: 'hidden',
         }}
       >
         <Toolbar />

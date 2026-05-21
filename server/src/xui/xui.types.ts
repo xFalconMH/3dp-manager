@@ -63,3 +63,11 @@ export interface XuiCertResult {
   privateKey: string;
   publicKey: string;
 }
+
+export interface XuiDiscoveredNode {
+  name?: string;
+  host: string;
+  port: number;
+  protocol: 'http' | 'https';
+  version?: string;
+}

@@ -82,7 +82,7 @@ describe('TunnelsController', () => {
 
       await controller.remove('1');
 
-      expect(tunnelsService.remove).toHaveBeenCalledWith(1);
+      expect(tunnelsService.remove).toHaveBeenCalledWith(1, false);
     });
   });
 });

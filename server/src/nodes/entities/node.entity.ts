@@ -1,0 +1,89 @@
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { Inbound } from '../../inbounds/entities/inbound.entity';
+import { Subscription } from '../../subscriptions/entities/subscription.entity';
+import { Tunnel } from '../../tunnels/entities/tunnel.entity';
+
+export enum NodeAuthType {
+  Password = 'password',
+  Token = 'token',
+}
+
+export enum NodeProtocol {
+  Http = 'http',
+  Https = 'https',
+}
+
+@Entity()
+export class Node {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column()
+  name: string;
+
+  @Column({ nullable: true })
+  url?: string;
+
+  @Column({ nullable: true })
+  host?: string;
+
+  @Column({ nullable: true })
+  domain?: string;
+
+  @Column({ nullable: true })
+  ip?: string;
+
+  @Column({ nullable: true })
+  flag?: string;
+
+  @Column({ type: 'int', nullable: true })
+  port?: number;
+
+  @Column({
+    type: 'enum',
+    enum: NodeProtocol,
+    default: NodeProtocol.Https,
+    nullable: true,
+  })
+  protocol?: NodeProtocol;
+
+  @Column({ type: 'enum', enum: NodeAuthType, default: NodeAuthType.Password })
+  authType: NodeAuthType;
+
+  @Column({ nullable: true })
+  login?: string;
+
+  @Column({ select: false, nullable: true })
+  password?: string;
+
+  @Column({ select: false, nullable: true })
+  token?: string;
+
+  @Column({ default: false })
+  isMain: boolean;
+
+  @Column({ nullable: true })
+  version?: string;
+
+  @OneToMany(() => Subscription, (subscription) => subscription.node)
+  subscriptions: Subscription[];
+
+  @OneToMany(() => Inbound, (inbound) => inbound.node)
+  inbounds: Inbound[];
+
+  @OneToMany(() => Tunnel, (tunnel) => tunnel.node)
+  tunnels: Tunnel[];
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+}

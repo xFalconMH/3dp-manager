@@ -3,6 +3,9 @@ name: Docker Build & Publish
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - 'client/**'
+      - 'server/**'
   workflow_dispatch:
 
 env:

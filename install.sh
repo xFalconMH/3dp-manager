@@ -96,6 +96,26 @@ get_random_port() {
   done
 }
 
+cleanup_previous_install_data() {
+  log "Checking for previous 3dp-manager installation data..."
+
+  if [[ -f docker-compose.yml ]]; then
+    warn "Existing docker-compose.yml found. Stopping previous installation and removing its volumes so newly generated credentials are used."
+    "${COMPOSE_CMD[@]}" down --volumes --remove-orphans || true
+  else
+    warn "docker-compose.yml not found. Removing known 3dp-manager containers if they still exist."
+  fi
+
+  docker rm -f 3dp-postgres 3dp-backend 3dp-frontend >/dev/null 2>&1 || true
+
+  for volume in 3dp-manager_pg_data 3dpmanager_pg_data; do
+    if docker volume inspect "$volume" >/dev/null 2>&1; then
+      warn "Removing stale Postgres volume: $volume"
+      docker volume rm "$volume" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
 #################################
 # ASCII-баннер
 #################################
@@ -189,6 +209,7 @@ mkdir -p "$PROJECT_DIR/server"
 mkdir -p "$PROJECT_DIR/client"
 
 cd "$PROJECT_DIR"
+cleanup_previous_install_data
 
 #################################
 # СБОР ДАННЫХ: SSL / HTTPS
@@ -303,13 +324,19 @@ case "$ssl_choice" in
     ;;
 
   3)
+    read -rp "Введите домен для панели (например panel.example.com; Enter — использовать IP): " INPUT_HOST
     read -rp "Путь к fullchain.pem: " user_cert
     read -rp "Путь к privkey.pem: " user_key
     if [[ -f "$user_cert" && -f "$user_key" ]]; then
       USE_SSL=true
       CERT_PATH="$user_cert"
       KEY_PATH="$user_key"
-      UI_HOST=$(hostname -I | awk '{print $1}')
+      if [ -n "$INPUT_HOST" ]; then
+        UI_HOST="$INPUT_HOST"
+      else
+        UI_HOST=$(hostname -I | awk '{print $1}')
+        warn "Домен не указан. В итоговом URL будет использован IP: $UI_HOST"
+      fi
     else
       warn "Файлы не найдены. Переключение на HTTP."
     fi
@@ -339,74 +366,16 @@ ADMIN_USER=$(openssl rand -base64 8)
 ADMIN_PASS=$(openssl rand -base64 12)
 # Определяем ALLOWED_ORIGINS из домена или IP
 if [[ -n "${UI_HOST:-}" ]]; then
-    if [[ "$UI_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        ALLOWED_ORIGINS="http://${UI_HOST}"
-    else
-        ALLOWED_ORIGINS="https://${UI_HOST}"
+    URL_SCHEME="http"
+    if [[ "$USE_SSL" == "true" ]]; then
+        URL_SCHEME="https"
     fi
+    ALLOWED_ORIGINS="${URL_SCHEME}://${UI_HOST}"
 else
     ALLOWED_ORIGINS=""
 fi
 log "Сгенерированы секретные ключи для БД и JWT."
 
-#################################
-# Hysteria 2
-#################################
-
-# Проверка установки Hysteria 2 через наличие systemd сервиса
-if ! systemctl cat hysteria-server.service &> /dev/null; then
-    echo "Сервис Hysteria 2 не найден. Начинаем установку..."
-    
-    # Установка Hysteria 2 согласно документации
-    bash <(curl -fsSL https://get.hy2.sh/) < /dev/null || true
-    
-    RANDOM_FREE_PORT=$(get_random_port 10000 20000)
-    
-    # Генерация надежных паролей
-    GENERATED_PASSWORD=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | cut -c1-16)
-    GENERATED_OBFS_PASSWORD=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | cut -c1-16)
-    
-    # Запрос данных у пользователя
-    echo "=== Настройка Hysteria 2 ==="
-    read -e -p "Введите email для уведомлений Let's Encrypt: " HYSTERIA_EMAIL
-    
-    HYSTERIA_EMAIL=$(echo "$HYSTERIA_EMAIL" | tr -cd 'a-zA-Z0-9.@_-')
-    
-    # Создание конфигурационного файла
-    cat > /etc/hysteria/config.yaml <<EOF
-listen: :$RANDOM_FREE_PORT
-
-acme:
-  domains:
-    - $UI_HOST
-  email: $HYSTERIA_EMAIL
-
-auth:
-  type: password
-  password: $GENERATED_PASSWORD
-
-obfs:
-  type: salamander
-  salamander:
-    password: $GENERATED_OBFS_PASSWORD
-
-masquerade:
-  type: proxy
-  proxy:
-    url: https://ya.ru/
-    rewriteHost: true
-EOF
-
-    # Перезапуск демона и включение сервиса для автозапуска
-    systemctl daemon-reload
-    systemctl enable --now hysteria-server.service
-    systemctl restart hysteria-server.service
-    
-    echo "Hysteria 2 успешно установлена и запущена на порту $RANDOM_FREE_PORT"
-    systemctl status hysteria-server.service --no-pager
-else
-    echo "Hysteria 2 уже установлена, пропускаем установку."
-fi
 
 #################################
 # ГЕНЕРАЦИЯ ФАЙЛОВ DOCKER
@@ -466,6 +435,8 @@ EOF
 
     # 2. Docker Compose
 cat > docker-compose.yml <<EOF
+name: 3dp-manager
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -502,8 +473,6 @@ services:
       ADMIN_LOGIN: ${ADMIN_USER}
       ADMIN_PASSWORD: ${ADMIN_PASS}
       PORT: 3100
-    volumes:
-      - /etc/hysteria/config.yaml:/etc/hysteria/config.yaml:ro
     networks:
       - app-network
 
@@ -577,6 +546,8 @@ EOF
 
     # 2. Docker Compose
 cat > docker-compose.yml <<EOF
+name: 3dp-manager
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -613,8 +584,6 @@ services:
       ADMIN_LOGIN: ${ADMIN_USER}
       ADMIN_PASSWORD: ${ADMIN_PASS}
       PORT: 3100
-    volumes:
-      - /etc/hysteria/config.yaml:/etc/hysteria/config.yaml:ro
     networks:
       - app-network
 
@@ -646,6 +615,9 @@ fi
 log "Сборка и запуск контейнеров..."
 # Останавливаем старые, если были
 "${COMPOSE_CMD[@]}" down || true
+
+# Подтягиваем свежие образы, потому что тег релиза переиспользуется.
+"${COMPOSE_CMD[@]}" pull || warn "Не удалось обновить образы перед запуском. Будет использован локальный кэш, если он есть."
 
 # Запускаем сборку и старт
 "${COMPOSE_CMD[@]}" up --build -d --remove-orphans

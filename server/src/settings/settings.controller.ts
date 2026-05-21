@@ -26,6 +26,11 @@ export class SettingsController {
     );
   }
 
+  @Get('countries')
+  countries() {
+    return COUNTRIES;
+  }
+
   @Post('check')
   async checkConnection(
     @Body() body: { xui_url: string; xui_login: string; xui_password: string },

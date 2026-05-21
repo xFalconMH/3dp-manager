@@ -14,6 +14,8 @@ import { Domain } from 'src/domains/entities/domain.entity';
 import { Setting } from 'src/settings/entities/setting.entity';
 import { XuiService } from 'src/xui/xui.service';
 import { InboundBuilderService } from 'src/inbounds/inbound-builder.service';
+import { Node } from 'src/nodes/entities/node.entity';
+import { Tunnel } from 'src/tunnels/entities/tunnel.entity';
 
 // Mock @nestjs/schedule для тестирования Cron
 jest.mock('@nestjs/schedule', () => ({
@@ -64,6 +66,19 @@ describe('RotationService', () => {
     save: jest.fn(),
   };
 
+  const mockNodeRepo = {
+    findOne: jest.fn(),
+    createQueryBuilder: jest.fn(() => ({
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getOne: jest.fn(),
+    })),
+  };
+
+  const mockTunnelRepo = {
+    findOne: jest.fn(),
+  };
+
   const mockXuiService = {
     login: jest.fn(),
     deleteInbound: jest.fn(),
@@ -79,6 +94,7 @@ describe('RotationService', () => {
     buildVmessTcp: jest.fn(),
     buildShadowsocksTcp: jest.fn(),
     buildTrojanRealityTcp: jest.fn(),
+    buildHysteria2Inbound: jest.fn(),
     buildHysteria2Link: jest.fn(),
     buildInboundLink: jest.fn(),
   };
@@ -104,6 +120,14 @@ describe('RotationService', () => {
           useValue: mockSettingRepo,
         },
         {
+          provide: getRepositoryToken(Node),
+          useValue: mockNodeRepo,
+        },
+        {
+          provide: getRepositoryToken(Tunnel),
+          useValue: mockTunnelRepo,
+        },
+        {
           provide: XuiService,
           useValue: mockXuiService,
         },
@@ -127,6 +151,10 @@ describe('RotationService', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+  });
+
+  beforeEach(() => {
+    mockXuiService.deleteInbound.mockResolvedValue(true);
   });
 
   describe('onModuleInit', () => {
@@ -437,7 +465,7 @@ describe('RotationService', () => {
         { id: 1, name: 'ya.ru', isEnabled: true },
       ]);
 
-      expect(xuiService.deleteInbound).toHaveBeenCalledWith(101);
+      expect(xuiService.deleteInbound).toHaveBeenCalledWith(101, undefined);
       expect(inboundRepo.delete).toHaveBeenCalled();
     });
 
@@ -468,6 +496,7 @@ describe('RotationService', () => {
         id: '1',
         uuid: 'uuid-1',
         isEnabled: true,
+        node: { id: 'node-1', domain: 'node.example.com' },
         inbounds: [],
         inboundsConfig: [{ type: 'hysteria2-udp', sni: 'ya.ru' }],
       };
@@ -475,15 +504,59 @@ describe('RotationService', () => {
       mockDomainRepo.find.mockResolvedValue([
         { id: 1, name: 'ya.ru', isEnabled: true },
       ]);
-      mockInboundBuilder.buildHysteria2Link.mockReturnValue('hy2://link');
+      mockXuiService.getNewX25519Cert.mockResolvedValue({
+        privateKey: 'key',
+        publicKey: 'pub',
+      });
+      mockInboundBuilder.buildHysteria2Inbound.mockReturnValue({
+        protocol: 'hysteria2',
+        remark: 'hysteria2-udp',
+        settings: '{"clients":[{"password":"uuid"}]}',
+        streamSettings: '{"tlsSettings":{"serverName":"ya.ru"}}',
+        sniffing: '{}',
+      });
+      mockXuiService.addInbound.mockResolvedValue(101);
+      mockInboundBuilder.buildInboundLink.mockReturnValue('hy2://link');
       mockInboundRepo.save.mockResolvedValue({});
 
       await (service as any).rotateSubscription(mockSub, [
         { id: 1, name: 'ya.ru', isEnabled: true },
       ]);
 
-      expect(xuiService.addInbound).not.toHaveBeenCalled();
-      expect(inboundBuilder.buildHysteria2Link).toHaveBeenCalled();
+      expect(xuiService.addInbound).toHaveBeenCalled();
+      expect(inboundBuilder.buildHysteria2Inbound).toHaveBeenCalledWith(
+        expect.objectContaining({ sni: 'node.example.com' }),
+      );
+      expect(inboundBuilder.buildInboundLink).toHaveBeenCalled();
+    });
+
+    it('does not save hysteria2 when 3x-ui does not create an inbound', async () => {
+      const mockSub = {
+        id: '1',
+        uuid: 'uuid-1',
+        isEnabled: true,
+        inbounds: [],
+        inboundsConfig: [{ type: 'hysteria2-udp', sni: 'ya.ru' }],
+      };
+
+      mockXuiService.getNewX25519Cert.mockResolvedValue({
+        privateKey: 'key',
+        publicKey: 'pub',
+      });
+      mockInboundBuilder.buildHysteria2Inbound.mockReturnValue({
+        protocol: 'hysteria2',
+        remark: 'hysteria2-udp',
+        settings: '{"clients":[{"password":"uuid"}]}',
+        streamSettings: '{"tlsSettings":{"serverName":"ya.ru"}}',
+        sniffing: '{}',
+      });
+      mockXuiService.addInbound.mockResolvedValue(null);
+
+      await (service as any).rotateSubscription(mockSub, [
+        { id: 1, name: 'ya.ru', isEnabled: true },
+      ]);
+
+      expect(inboundRepo.save).not.toHaveBeenCalled();
     });
 
     it('должен использовать случайный порт, если указано random', async () => {

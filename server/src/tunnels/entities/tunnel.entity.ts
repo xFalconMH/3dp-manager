@@ -1,4 +1,5 @@
-import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, ManyToOne } from 'typeorm';
+import { Node } from '../../nodes/entities/node.entity';
 
 @Entity()
 export class Tunnel {
@@ -25,6 +26,18 @@ export class Tunnel {
 
   @Column({ nullable: true })
   domain: string;
+
+  @Column({ nullable: true })
+  nodeId?: string;
+
+  @ManyToOne(() => Node, (node) => node.tunnels, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  node?: Node;
+
+  @Column({ type: 'simple-array', nullable: true })
+  ports?: number[];
 
   @Column({ default: false })
   isInstalled: boolean;

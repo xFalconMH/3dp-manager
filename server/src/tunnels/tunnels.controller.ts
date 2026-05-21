@@ -1,13 +1,13 @@
-import { Controller, Get, Post, Body, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Delete, Query } from '@nestjs/common';
 import { TunnelsService } from './tunnels.service';
-import { Tunnel } from './entities/tunnel.entity';
+import { CreateTunnelDto } from './dto/create-tunnel.dto';
 
 @Controller('tunnels')
 export class TunnelsController {
   constructor(private readonly tunnelsService: TunnelsService) {}
 
   @Post()
-  create(@Body() createTunnelDto: Tunnel) {
+  create(@Body() createTunnelDto: CreateTunnelDto) {
     return this.tunnelsService.create(createTunnelDto);
   }
 
@@ -21,8 +21,16 @@ export class TunnelsController {
     return this.tunnelsService.installScript(+id);
   }
 
+  @Post(':id/uninstall')
+  uninstall(@Param('id') id: string) {
+    return this.tunnelsService.uninstallScript(+id);
+  }
+
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.tunnelsService.remove(+id);
+  remove(
+    @Param('id') id: string,
+    @Query('deleteForwarding') deleteForwarding?: string,
+  ) {
+    return this.tunnelsService.remove(+id, deleteForwarding === 'true');
   }
 }

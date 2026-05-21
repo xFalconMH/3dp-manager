@@ -54,4 +54,4 @@ ENV PORT=3100
 
 EXPOSE 3100
 
-CMD ["node", "dist/main"]
+CMD ["node", "dist/src/main"]
