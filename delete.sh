@@ -17,6 +17,20 @@ need_root() {
   [[ $EUID -eq 0 ]] || die "Запускать только от root"
 }
 
+resolve_compose_cmd() {
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD=("docker" "compose")
+    return 0
+  fi
+
+  if command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD=("docker-compose")
+    return 0
+  fi
+
+  return 1
+}
+
 echo "Перед удалением самостоятельно удалите подписки в 3DP-MANAGER, чтобы инбунды удалились в панели 3x-ui"
 read -r -p "Вы уверены, что хотите удалить? (y/n): " answer
 
@@ -39,42 +53,54 @@ PROJECT_DIR="/opt/3dp-manager"
 
 log "Начинаем удаление 3dp-manager"
 
-if [[ ! -d "$PROJECT_DIR" ]]; then
-  warn "Директория $PROJECT_DIR не найдена — удалять нечего"
-  exit 0
+if [[ -d "$PROJECT_DIR" ]]; then
+  cd "$PROJECT_DIR"
+else
+  warn "Директория $PROJECT_DIR не найдена — проверяем Docker-ресурсы по известным именам"
 fi
-
-cd "$PROJECT_DIR"
 
 #################################
 # DOCKER COMPOSE DOWN
 #################################
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-  if [[ -f docker-compose.yml ]]; then
+if command -v docker >/dev/null 2>&1; then
+  if [[ -d "$PROJECT_DIR" && -f docker-compose.yml ]] && resolve_compose_cmd; then
     log "Останавливаем контейнеры 3dp-manager"
-    docker compose down --volumes --remove-orphans || warn "Ошибка при docker compose down"
+    "${COMPOSE_CMD[@]}" down --volumes --remove-orphans || warn "Ошибка при docker compose down"
   else
-    warn "docker-compose.yml не найден"
+    warn "docker-compose.yml или Docker Compose не найден — удаляем контейнеры и volumes по известным именам"
   fi
+
+  docker rm -f 3dp-postgres 3dp-backend 3dp-frontend >/dev/null 2>&1 || true
+
+  for volume in 3dp-manager_pg_data 3dpmanager_pg_data; do
+    if docker volume inspect "$volume" >/dev/null 2>&1; then
+      log "Удаляем volume $volume"
+      docker volume rm "$volume" >/dev/null 2>&1 || warn "Не удалось удалить volume $volume"
+    fi
+  done
 else
-  warn "Docker или docker compose не установлен — пропуск"
+  warn "Docker не установлен — пропуск удаления Docker-ресурсов"
 fi
 
 #################################
 # CLEAN IMAGES
 #################################
-log "Удаляем образы 3dp-manager (если есть)"
+if command -v docker >/dev/null 2>&1; then
+  log "Удаляем образы 3dp-manager (если есть)"
 
-docker images --format '{{.Repository}} {{.ID}}' \
-  | grep 3dp-manager \
-  | awk '{print $2}' \
-  | xargs -r docker rmi -f || true
+  docker images --format '{{.Repository}} {{.ID}}' \
+    | grep 3dp-manager \
+    | awk '{print $2}' \
+    | xargs -r docker rmi -f || true
+fi
 
 #################################
 # REMOVE DIRECTORY
 #################################
-log "Удаляем $PROJECT_DIR"
-rm -rf "$PROJECT_DIR"
+if [[ -d "$PROJECT_DIR" ]]; then
+  log "Удаляем $PROJECT_DIR"
+  rm -rf "$PROJECT_DIR"
+fi
 
 #################################
 # DONE

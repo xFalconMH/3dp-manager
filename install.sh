@@ -104,8 +104,9 @@ cleanup_previous_install_data() {
     "${COMPOSE_CMD[@]}" down --volumes --remove-orphans || true
   else
     warn "docker-compose.yml not found. Removing known 3dp-manager containers if they still exist."
-    docker rm -f 3dp-postgres 3dp-backend 3dp-frontend >/dev/null 2>&1 || true
   fi
+
+  docker rm -f 3dp-postgres 3dp-backend 3dp-frontend >/dev/null 2>&1 || true
 
   for volume in 3dp-manager_pg_data 3dpmanager_pg_data; do
     if docker volume inspect "$volume" >/dev/null 2>&1; then
@@ -323,13 +324,19 @@ case "$ssl_choice" in
     ;;
 
   3)
+    read -rp "Введите домен для панели (например panel.example.com; Enter — использовать IP): " INPUT_HOST
     read -rp "Путь к fullchain.pem: " user_cert
     read -rp "Путь к privkey.pem: " user_key
     if [[ -f "$user_cert" && -f "$user_key" ]]; then
       USE_SSL=true
       CERT_PATH="$user_cert"
       KEY_PATH="$user_key"
-      UI_HOST=$(hostname -I | awk '{print $1}')
+      if [ -n "$INPUT_HOST" ]; then
+        UI_HOST="$INPUT_HOST"
+      else
+        UI_HOST=$(hostname -I | awk '{print $1}')
+        warn "Домен не указан. В итоговом URL будет использован IP: $UI_HOST"
+      fi
     else
       warn "Файлы не найдены. Переключение на HTTP."
     fi
@@ -359,11 +366,11 @@ ADMIN_USER=$(openssl rand -base64 8)
 ADMIN_PASS=$(openssl rand -base64 12)
 # Определяем ALLOWED_ORIGINS из домена или IP
 if [[ -n "${UI_HOST:-}" ]]; then
-    if [[ "$UI_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        ALLOWED_ORIGINS="http://${UI_HOST}"
-    else
-        ALLOWED_ORIGINS="https://${UI_HOST}"
+    URL_SCHEME="http"
+    if [[ "$USE_SSL" == "true" ]]; then
+        URL_SCHEME="https"
     fi
+    ALLOWED_ORIGINS="${URL_SCHEME}://${UI_HOST}"
 else
     ALLOWED_ORIGINS=""
 fi
