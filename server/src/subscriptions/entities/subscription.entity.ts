@@ -36,6 +36,10 @@ export class Subscription {
     link?: string;
     nodeId?: string;
     relayServerId?: number;
+    flag?: string;
+    name?: string;
+    certificateFile?: string;
+    keyFile?: string;
   }>;
 
   @Column({ nullable: true })

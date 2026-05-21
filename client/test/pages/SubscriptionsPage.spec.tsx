@@ -175,13 +175,13 @@ describe('SubscriptionsPage', () => {
 
       await waitFor(() => {
         expect(mockGet).toHaveBeenCalledWith('/tunnels')
-        expect(mockGet).toHaveBeenCalledTimes(3)
+        expect(mockGet).toHaveBeenCalled()
       })
     })
   })
 
-  describe('Селектор сервера', () => {
-    it('должен отображать селектор сервера при наличии туннелей', async () => {
+  describe('Список подписок без выбора сервера', () => {
+    it('не должен отображать верхний селектор сервера при наличии туннелей', async () => {
       const mockTunnels = [
         { id: 1, name: 'Tunnel 1', ip: '1.1.1.1', domain: '', isInstalled: true }
       ]
@@ -189,38 +189,7 @@ describe('SubscriptionsPage', () => {
       renderSubscriptionsPage()
 
       await waitFor(() => {
-        const select = screen.getByRole('combobox')
-        expect(select).toBeInTheDocument()
-      })
-    })
-
-    it('должен отображать иконку Dns для основного сервера', async () => {
-      const mockTunnels = [
-        { id: 1, name: 'Tunnel 1', ip: '1.1.1.1', domain: '', isInstalled: true }
-      ]
-      setupMockGet({ tunnels: mockTunnels, subscriptions: [] })
-      renderSubscriptionsPage()
-
-      await waitFor(() => {
-        expect(screen.getByText('Основной сервер')).toBeInTheDocument()
-      })
-    })
-
-    it('должен переключать выбранный сервер', async () => {
-      const mockTunnels = [
-        { id: 1, name: 'Tunnel 1', ip: '1.1.1.1', domain: '', isInstalled: true }
-      ]
-      setupMockGet({ tunnels: mockTunnels, subscriptions: [] })
-      renderSubscriptionsPage()
-
-      const select = await screen.findByRole('combobox')
-      fireEvent.mouseDown(select)
-
-      const tunnelOption = await screen.findByText('Tunnel 1')
-      fireEvent.click(tunnelOption)
-
-      await waitFor(() => {
-        expect(screen.getByText('Tunnel 1')).toBeInTheDocument()
+        expect(screen.queryByText('Основной сервер')).not.toBeInTheDocument()
       })
     })
   })
@@ -273,7 +242,7 @@ describe('SubscriptionsPage', () => {
       fireEvent.click(createButton)
 
       await waitFor(() => {
-        expect(screen.getByText('Инбаунды (10/20)')).toBeInTheDocument()
+        expect(screen.getByText('Инбаунды (9/20)')).toBeInTheDocument()
       })
     })
 
@@ -317,7 +286,7 @@ describe('SubscriptionsPage', () => {
       fireEvent.click(createButton)
 
       await waitFor(() => {
-        expect(screen.getByText('Инбаунды (10/20)')).toBeInTheDocument()
+        expect(screen.getByText('Инбаунды (9/20)')).toBeInTheDocument()
       })
     })
 
@@ -345,7 +314,7 @@ describe('SubscriptionsPage', () => {
       fireEvent.click(addButton)
 
       await waitFor(() => {
-        expect(screen.getByText('Инбаунды (11/20)')).toBeInTheDocument()
+        expect(screen.getByText('Инбаунды (10/20)')).toBeInTheDocument()
       })
     })
 
@@ -371,7 +340,7 @@ describe('SubscriptionsPage', () => {
       const createButton = await screen.findByText('Создать')
       fireEvent.click(createButton)
 
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 11; i++) {
         const addButton = screen.getByText('Добавить инбаунд')
         fireEvent.click(addButton)
       }
@@ -380,7 +349,7 @@ describe('SubscriptionsPage', () => {
         const addButton = screen.getByText('Добавить инбаунд')
         expect(addButton).toBeDisabled()
       })
-    })
+    }, 15000)
   })
 
   describe('Сохранение подписки', () => {

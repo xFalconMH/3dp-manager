@@ -5,7 +5,10 @@ import { Tunnel } from './entities/tunnel.entity';
 import { SshService } from './ssh.service';
 import { Setting } from '../settings/entities/setting.entity';
 import { Node } from '../nodes/entities/node.entity';
+import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { CreateTunnelDto } from './dto/create-tunnel.dto';
+import * as net from 'net';
+import * as dns from 'dns/promises';
 
 @Injectable()
 export class TunnelsService {
@@ -15,10 +18,14 @@ export class TunnelsService {
     @InjectRepository(Tunnel) private tunnelRepo: Repository<Tunnel>,
     @InjectRepository(Setting) private settingRepo: Repository<Setting>,
     @InjectRepository(Node) private nodeRepo: Repository<Node>,
+    @InjectRepository(Subscription)
+    private subscriptionRepo: Repository<Subscription>,
     private sshService: SshService,
   ) {}
 
   async create(createTunnelDto: CreateTunnelDto) {
+    const address = await this.resolveRelayAddress(createTunnelDto.ip);
+
     const node = createTunnelDto.nodeId
       ? await this.nodeRepo.findOne({ where: { id: createTunnelDto.nodeId } })
       : await this.nodeRepo.findOne({ where: { isMain: true } });
@@ -27,20 +34,19 @@ export class TunnelsService {
       throw new HttpException('Node not found', HttpStatus.BAD_REQUEST);
     }
 
-    const ip = this.getNodeAddress(node);
-    if (!ip) {
-      throw new HttpException(
-        'Cannot determine relay IP from node URL',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-
-    const tunnel = this.tunnelRepo.create({
+    const tunnelPayload = {
       ...createTunnelDto,
-      ip,
+      ip: address.ip,
       node,
       nodeId: node.id,
-    });
+    };
+
+    const domain = createTunnelDto.domain || address.domain;
+    if (domain) {
+      Object.assign(tunnelPayload, { domain });
+    }
+
+    const tunnel = this.tunnelRepo.create(tunnelPayload);
     return this.tunnelRepo.save(tunnel);
   }
 
@@ -53,7 +59,35 @@ export class TunnelsService {
       await this.uninstallScript(id);
     }
 
+    await this.cleanupRelayDependencies(id);
     return this.tunnelRepo.delete(id);
+  }
+
+  private async cleanupRelayDependencies(id: number) {
+    const subscriptions = await this.subscriptionRepo.find({
+      where: [{ relayServerId: id }],
+    });
+
+    for (const sub of subscriptions) {
+      sub.relayServerId = undefined;
+      sub.relayServer = undefined;
+      await this.subscriptionRepo.save(sub);
+    }
+
+    const configuredSubscriptions = await this.subscriptionRepo.find();
+    for (const sub of configuredSubscriptions) {
+      const config = sub.inboundsConfig || [];
+      const nextConfig = config.map((item) => {
+        if (item.relayServerId !== id) return item;
+        const { relayServerId: _relayServerId, ...rest } = item;
+        return rest;
+      });
+
+      if (JSON.stringify(nextConfig) !== JSON.stringify(config)) {
+        sub.inboundsConfig = nextConfig;
+        await this.subscriptionRepo.save(sub);
+      }
+    }
   }
 
   async installScript(id: number) {
@@ -79,7 +113,10 @@ export class TunnelsService {
       );
     }
     const mainServerIp =
-      targetNode?.host || this.getNodeAddress(targetNode) || hostSetting.value;
+      targetNode?.ip ||
+      targetNode?.host ||
+      this.getNodeAddress(targetNode) ||
+      hostSetting?.value;
 
     this.logger.debug(
       `Начинаем установку редиректа на ${tunnel.ip} -> ${mainServerIp}`,
@@ -165,5 +202,43 @@ export class TunnelsService {
     } catch {
       return node.url;
     }
+  }
+
+  private async resolveRelayAddress(value: string) {
+    const address = value.trim();
+    if (!address) {
+      throw new HttpException(
+        'Relay server address is required',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (net.isIP(address) !== 0) {
+      return { ip: address, domain: undefined };
+    }
+
+    if (!this.isValidHostname(address)) {
+      throw new HttpException(
+        'Relay server address is invalid',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    try {
+      const result = await dns.lookup(address);
+      return { ip: result.address, domain: address };
+    } catch {
+      throw new HttpException(
+        'Relay server domain cannot be resolved',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+  }
+
+  private isValidHostname(value: string) {
+    if (value.length > 253) return false;
+    return /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(
+      value,
+    );
   }
 }

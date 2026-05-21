@@ -6,7 +6,7 @@ set -euo pipefail
 #################################
 PROJECT_DIR="/opt/3dp-manager"
 DOCKER_USER="denpiligrim"
-DOCKER_TAG="main"
+DOCKER_TAG="dp-new-release"
 IMAGE_SERVER="ghcr.io/${DOCKER_USER}/3dp-manager-server:${DOCKER_TAG}"
 IMAGE_CLIENT="ghcr.io/${DOCKER_USER}/3dp-manager-client:${DOCKER_TAG}"
 
@@ -92,6 +92,25 @@ get_random_port() {
     if ! ss -ltun | awk '{print $4}' | grep -q ":$PORT\$"; then
       echo "$PORT"
       return
+    fi
+  done
+}
+
+cleanup_previous_install_data() {
+  log "Checking for previous 3dp-manager installation data..."
+
+  if [[ -f docker-compose.yml ]]; then
+    warn "Existing docker-compose.yml found. Stopping previous installation and removing its volumes so newly generated credentials are used."
+    "${COMPOSE_CMD[@]}" down --volumes --remove-orphans || true
+  else
+    warn "docker-compose.yml not found. Removing known 3dp-manager containers if they still exist."
+    docker rm -f 3dp-postgres 3dp-backend 3dp-frontend >/dev/null 2>&1 || true
+  fi
+
+  for volume in 3dp-manager_pg_data 3dpmanager_pg_data; do
+    if docker volume inspect "$volume" >/dev/null 2>&1; then
+      warn "Removing stale Postgres volume: $volume"
+      docker volume rm "$volume" >/dev/null 2>&1 || true
     fi
   done
 }
@@ -189,6 +208,7 @@ mkdir -p "$PROJECT_DIR/server"
 mkdir -p "$PROJECT_DIR/client"
 
 cd "$PROJECT_DIR"
+cleanup_previous_install_data
 
 #################################
 # СБОР ДАННЫХ: SSL / HTTPS
@@ -349,64 +369,6 @@ else
 fi
 log "Сгенерированы секретные ключи для БД и JWT."
 
-#################################
-# Hysteria 2
-#################################
-
-# Проверка установки Hysteria 2 через наличие systemd сервиса
-if ! systemctl cat hysteria-server.service &> /dev/null; then
-    echo "Сервис Hysteria 2 не найден. Начинаем установку..."
-    
-    # Установка Hysteria 2 согласно документации
-    bash <(curl -fsSL https://get.hy2.sh/) < /dev/null || true
-    
-    RANDOM_FREE_PORT=$(get_random_port 10000 20000)
-    
-    # Генерация надежных паролей
-    GENERATED_PASSWORD=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | cut -c1-16)
-    GENERATED_OBFS_PASSWORD=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | cut -c1-16)
-    
-    # Запрос данных у пользователя
-    echo "=== Настройка Hysteria 2 ==="
-    read -e -p "Введите email для уведомлений Let's Encrypt: " HYSTERIA_EMAIL
-    
-    HYSTERIA_EMAIL=$(echo "$HYSTERIA_EMAIL" | tr -cd 'a-zA-Z0-9.@_-')
-    
-    # Создание конфигурационного файла
-    cat > /etc/hysteria/config.yaml <<EOF
-listen: :$RANDOM_FREE_PORT
-
-acme:
-  domains:
-    - $UI_HOST
-  email: $HYSTERIA_EMAIL
-
-auth:
-  type: password
-  password: $GENERATED_PASSWORD
-
-obfs:
-  type: salamander
-  salamander:
-    password: $GENERATED_OBFS_PASSWORD
-
-masquerade:
-  type: proxy
-  proxy:
-    url: https://ya.ru/
-    rewriteHost: true
-EOF
-
-    # Перезапуск демона и включение сервиса для автозапуска
-    systemctl daemon-reload
-    systemctl enable --now hysteria-server.service
-    systemctl restart hysteria-server.service
-    
-    echo "Hysteria 2 успешно установлена и запущена на порту $RANDOM_FREE_PORT"
-    systemctl status hysteria-server.service --no-pager
-else
-    echo "Hysteria 2 уже установлена, пропускаем установку."
-fi
 
 #################################
 # ГЕНЕРАЦИЯ ФАЙЛОВ DOCKER
@@ -466,6 +428,8 @@ EOF
 
     # 2. Docker Compose
 cat > docker-compose.yml <<EOF
+name: 3dp-manager
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -476,7 +440,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASS}
       POSTGRES_DB: 3dp_manager
     volumes:
-      - pg_data:/var/lib/postgresql
+      - pg_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d 3dp_manager"]
       interval: 5s
@@ -502,8 +466,6 @@ services:
       ADMIN_LOGIN: ${ADMIN_USER}
       ADMIN_PASSWORD: ${ADMIN_PASS}
       PORT: 3100
-    volumes:
-      - /etc/hysteria/config.yaml:/etc/hysteria/config.yaml:ro
     networks:
       - app-network
 
@@ -577,6 +539,8 @@ EOF
 
     # 2. Docker Compose
 cat > docker-compose.yml <<EOF
+name: 3dp-manager
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -587,7 +551,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASS}
       POSTGRES_DB: 3dp_manager
     volumes:
-      - pg_data:/var/lib/postgresql
+      - pg_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d 3dp_manager"]
       interval: 5s
@@ -613,8 +577,6 @@ services:
       ADMIN_LOGIN: ${ADMIN_USER}
       ADMIN_PASSWORD: ${ADMIN_PASS}
       PORT: 3100
-    volumes:
-      - /etc/hysteria/config.yaml:/etc/hysteria/config.yaml:ro
     networks:
       - app-network
 

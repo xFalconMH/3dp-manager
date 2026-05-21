@@ -6,6 +6,9 @@ export interface NodeRecord {
   name: string;
   url: string;
   host?: string;
+  domain?: string;
+  ip?: string;
+  flag?: string;
   port?: number;
   protocol?: NodeProtocol;
   authType: NodeAuthType;
@@ -19,6 +22,9 @@ export interface NodeRecord {
 export interface NodePayload {
   name: string;
   url: string;
+  domain?: string;
+  ip?: string;
+  flag?: string;
   authType: NodeAuthType;
   login?: string;
   password?: string;

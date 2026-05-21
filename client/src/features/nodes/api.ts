@@ -42,6 +42,17 @@ export const nodesApi = {
     return data;
   },
 
+  async detectLocation(url: string) {
+    const { data } = await api.post<{
+      ip?: string;
+      host?: string;
+      flag?: string;
+      country?: string;
+      countryCode?: string;
+    }>('/nodes/detect-location', { url });
+    return data;
+  },
+
   async syncFromMain() {
     const { data } = await api.post<{ success: boolean; count: number }>(
       '/nodes/sync/main',

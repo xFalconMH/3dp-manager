@@ -39,6 +39,7 @@ interface Tunnel {
   id: number;
   name: string;
   ip: string;
+  domain?: string;
   sshPort: number;
   username: string;
   isInstalled: boolean;
@@ -49,6 +50,7 @@ interface Tunnel {
 const emptyForm = {
   name: '',
   nodeId: '',
+  ip: '',
   sshPort: 22,
   username: 'root',
   password: '',
@@ -74,7 +76,7 @@ export default function TunnelsPage() {
     title: '',
     confirmText: 'Подтвердить',
     confirmColor: 'primary' as 'primary' | 'error',
-    onConfirm: () => { },
+    onConfirm: () => {},
   });
 
   const theme = useTheme();
@@ -87,8 +89,8 @@ export default function TunnelsPage() {
         api.get<Tunnel[]>('/tunnels'),
         api.get<NodeRecord[]>('/nodes'),
       ]);
-      setTunnels(tunnelsRes.data);
-      setNodes(nodesRes.data);
+      setTunnels(Array.isArray(tunnelsRes.data) ? tunnelsRes.data : []);
+      setNodes(Array.isArray(nodesRes.data) ? nodesRes.data : []);
     } catch (error) {
       Logger.error('Failed to load forwarding data', 'Tunnels', error);
     }
@@ -98,14 +100,12 @@ export default function TunnelsPage() {
     loadData();
   }, [loadData]);
 
-  const getNodeAddress = (node?: NodeRecord) => {
-    if (!node?.url) return '';
-    try {
-      return new URL(node.url).hostname;
-    } catch {
-      return node.url;
-    }
-  };
+  const isValidIp = (value: string) =>
+    /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(value.trim()) ||
+    /^([0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}$/i.test(value.trim());
+  const isValidDomain = (value: string) =>
+    /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(value.trim());
+  const isValidAddress = (value: string) => isValidIp(value) || isValidDomain(value);
 
   const selectedNode = nodes.find((node) => node.id === form.nodeId) || mainNode;
 
@@ -114,6 +114,7 @@ export default function TunnelsPage() {
 
     if (!form.name.trim()) errors.name = 'Введите название relay сервера';
     if (!selectedNode) errors.nodeId = 'Добавьте или выберите ноду';
+    if (!isValidAddress(form.ip)) errors.ip = 'Введите корректный IP или домен relay сервера';
     if (!form.sshPort || form.sshPort < 1 || form.sshPort > 65535) {
       errors.sshPort = 'Порт должен быть от 1 до 65535';
     }
@@ -137,6 +138,10 @@ export default function TunnelsPage() {
   };
 
   const openCreate = () => {
+    if (nodes.length === 0) {
+      setSnackbar({ open: true, type: 'error', message: 'Создайте хотя бы одну ноду!' });
+      return;
+    }
     resetForm();
     setOpen(true);
   };
@@ -154,11 +159,15 @@ export default function TunnelsPage() {
       privateKey: authMethod === 'key' ? form.privateKey : undefined,
     };
 
-    await api.post('/tunnels', payload);
-    setOpen(false);
-    resetForm();
-    loadData();
-    setSnackbar({ open: true, type: 'success', message: 'Relay сервер добавлен' });
+    try {
+      await api.post('/tunnels', payload);
+      setOpen(false);
+      resetForm();
+      loadData();
+      setSnackbar({ open: true, type: 'success', message: 'Relay сервер добавлен' });
+    } catch (error) {
+      setSnackbar({ open: true, type: 'error', message: getApiErrorMessage(error, 'Не удалось добавить relay сервер') });
+    }
   };
 
   const handleInstall = (id: number) => {
@@ -185,7 +194,7 @@ export default function TunnelsPage() {
   const handleDelete = (tunnel: Tunnel) => {
     const deleteForwarding =
       tunnel.isInstalled &&
-      window.confirm('Удалить перенаправление на сервере через forwarding_delete.sh?');
+      window.confirm('Удалить перенаправление на сервере через forwarding_delete.sh (приведет сервер к первоначальному состоянию)? Нажмите Ок для подтверждения.');
 
     setConfirmDialog({
       open: true,
@@ -197,9 +206,7 @@ export default function TunnelsPage() {
       onConfirm: async () => {
         setLoadingId(tunnel.id);
         try {
-          await api.delete(`/tunnels/${tunnel.id}`, {
-            params: { deleteForwarding },
-          });
+          await api.delete(`/tunnels/${tunnel.id}`, { params: { deleteForwarding } });
           setSnackbar({ open: true, type: 'success', message: 'Relay сервер удалён' });
           loadData();
         } catch (error) {
@@ -215,11 +222,8 @@ export default function TunnelsPage() {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
         <Typography variant={isMobile ? 'h5' : 'h4'}>Relay серверы</Typography>
-        <Box>
-          <Button variant="contained" startIcon={<Add />} onClick={openCreate}>
-            Добавить
-          </Button>
-        </Box>
+        <Box><Button variant="contained" startIcon={<Add />} onClick={openCreate}>Добавить</Button></Box>
+        
       </Box>
 
       <Paper sx={{ overflowX: 'auto' }}>
@@ -241,7 +245,7 @@ export default function TunnelsPage() {
                 <TableCell>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Dns fontSize="small" color="action" />
-                    {tunnel.ip}
+                    {tunnel.domain || tunnel.ip}
                   </Box>
                 </TableCell>
                 <TableCell>
@@ -284,61 +288,20 @@ export default function TunnelsPage() {
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Новый relay сервер</DialogTitle>
         <DialogContent>
-          <TextField
-            margin="dense"
-            label="Название"
-            fullWidth
-            value={form.name}
-            onChange={handleChange('name')}
-            error={!!formErrors.name}
-            helperText={formErrors.name}
-          />
-          <FormControl fullWidth margin="dense" error={!!formErrors.nodeId}>
+          <TextField margin="dense" label="Название" required fullWidth value={form.name} onChange={handleChange('name')} error={!!formErrors.name} helperText={formErrors.name} />
+          <FormControl fullWidth required margin="dense" error={!!formErrors.nodeId}>
             <InputLabel>Нода</InputLabel>
-            <Select
-              value={form.nodeId || mainNode?.id || ''}
-              label="Нода"
-              onChange={(event) => setForm((prev) => ({ ...prev, nodeId: event.target.value }))}
-            >
+            <Select value={form.nodeId || mainNode?.id || ''} label="Нода" onChange={(event) => setForm((prev) => ({ ...prev, nodeId: event.target.value }))}>
               {nodes.map((node) => (
-                <MenuItem key={node.id} value={node.id}>
-                  {node.name}{node.isMain ? ' (основная)' : ''}
-                </MenuItem>
+                <MenuItem key={node.id} value={node.id}>{node.name}{node.isMain ? ' (основная)' : ''}</MenuItem>
               ))}
             </Select>
-            {formErrors.nodeId && (
-              <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.5 }}>
-                {formErrors.nodeId}
-              </Typography>
-            )}
+            {formErrors.nodeId && <Typography variant="caption" color="error" sx={{ mt: 0.5, ml: 1.5 }}>{formErrors.nodeId}</Typography>}
           </FormControl>
-          <TextField
-            margin="dense"
-            label="IP из URL ноды"
-            fullWidth
-            value={getNodeAddress(selectedNode)}
-            slotProps={{ input: { readOnly: true } }}
-          />
+          <TextField margin="dense" label="IP или домен relay сервера" required fullWidth value={form.ip} onChange={handleChange('ip')} error={!!formErrors.ip} helperText={formErrors.ip} />
           <Box sx={{ display: 'flex', gap: 2 }}>
-            <TextField
-              margin="dense"
-              label="SSH порт"
-              type="number"
-              fullWidth
-              value={form.sshPort}
-              onChange={handleChange('sshPort')}
-              error={!!formErrors.sshPort}
-              helperText={formErrors.sshPort}
-            />
-            <TextField
-              margin="dense"
-              label="SSH пользователь"
-              fullWidth
-              value={form.username}
-              onChange={handleChange('username')}
-              error={!!formErrors.username}
-              helperText={formErrors.username}
-            />
+            <TextField margin="dense" label="SSH порт" required type="number" fullWidth value={form.sshPort} onChange={handleChange('sshPort')} error={!!formErrors.sshPort} helperText={formErrors.sshPort} />
+            <TextField margin="dense" label="SSH пользователь" required fullWidth value={form.username} onChange={handleChange('username')} error={!!formErrors.username} helperText={formErrors.username} />
           </Box>
           <FormControl component="fieldset" sx={{ mt: 2, mb: 1 }}>
             <RadioGroup row value={authMethod} onChange={(e) => setAuthMethod(e.target.value as 'password' | 'key')}>
@@ -348,30 +311,9 @@ export default function TunnelsPage() {
           </FormControl>
 
           {authMethod === 'password' ? (
-            <TextField
-              margin="dense"
-              label="SSH пароль"
-              type="password"
-              fullWidth
-              value={form.password}
-              onChange={handleChange('password')}
-              error={!!formErrors.password}
-              helperText={formErrors.password}
-            />
+            <TextField margin="dense" label="SSH пароль" required type="password" fullWidth value={form.password} onChange={handleChange('password')} error={!!formErrors.password} helperText={formErrors.password} />
           ) : (
-            <TextField
-              margin="dense"
-              label="SSH private key"
-              multiline
-              rows={4}
-              fullWidth
-              value={form.privateKey}
-              onChange={handleChange('privateKey')}
-              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-              slotProps={{ input: { style: { fontFamily: 'monospace', fontSize: '0.875rem' } } }}
-              error={!!formErrors.privateKey}
-              helperText={formErrors.privateKey}
-            />
+            <TextField margin="dense" label="SSH private key" required multiline rows={4} fullWidth value={form.privateKey} onChange={handleChange('privateKey')} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" slotProps={{ input: { style: { fontFamily: 'monospace', fontSize: '0.875rem' } } }} error={!!formErrors.privateKey} helperText={formErrors.privateKey} />
           )}
         </DialogContent>
         <DialogActions>
@@ -382,33 +324,15 @@ export default function TunnelsPage() {
 
       <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ ...confirmDialog, open: false })}>
         <DialogTitle>Подтверждение</DialogTitle>
-        <DialogContent>
-          <Typography>{confirmDialog.title}</Typography>
-        </DialogContent>
+        <DialogContent><Typography>{confirmDialog.title}</Typography></DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmDialog({ ...confirmDialog, open: false })}>Отмена</Button>
-          <Button
-            onClick={() => {
-              setConfirmDialog({ ...confirmDialog, open: false });
-              confirmDialog.onConfirm();
-            }}
-            variant="contained"
-            color={confirmDialog.confirmColor}
-          >
-            {confirmDialog.confirmText}
-          </Button>
+          <Button onClick={() => { setConfirmDialog({ ...confirmDialog, open: false }); confirmDialog.onConfirm(); }} variant="contained" color={confirmDialog.confirmColor}>{confirmDialog.confirmText}</Button>
         </DialogActions>
       </Dialog>
 
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert onClose={() => setSnackbar({ ...snackbar, open: false })} severity={snackbar.type} sx={{ width: '100%' }}>
-          {snackbar.message}
-        </Alert>
+      <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={() => setSnackbar({ ...snackbar, open: false })} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        <Alert onClose={() => setSnackbar({ ...snackbar, open: false })} severity={snackbar.type} sx={{ width: '100%' }}>{snackbar.message}</Alert>
       </Snackbar>
     </Box>
   );

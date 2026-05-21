@@ -8,6 +8,8 @@ import { TunnelsService } from 'src/tunnels/tunnels.service';
 import { Tunnel } from 'src/tunnels/entities/tunnel.entity';
 import { SshService } from 'src/tunnels/ssh.service';
 import { Setting } from 'src/settings/entities/setting.entity';
+import { Node } from 'src/nodes/entities/node.entity';
+import { Subscription } from 'src/subscriptions/entities/subscription.entity';
 
 describe('TunnelsService', () => {
   let service: TunnelsService;
@@ -34,6 +36,15 @@ describe('TunnelsService', () => {
     save: jest.fn(),
   };
 
+  const mockNodeRepo = {
+    findOne: jest.fn(),
+  };
+
+  const mockSubscriptionRepo = {
+    find: jest.fn(),
+    save: jest.fn(),
+  };
+
   const mockSshService = {
     executeCommand: jest.fn(),
   };
@@ -51,6 +62,14 @@ describe('TunnelsService', () => {
           useValue: mockSettingRepo,
         },
         {
+          provide: getRepositoryToken(Node),
+          useValue: mockNodeRepo,
+        },
+        {
+          provide: getRepositoryToken(Subscription),
+          useValue: mockSubscriptionRepo,
+        },
+        {
           provide: SshService,
           useValue: mockSshService,
         },
@@ -64,21 +83,27 @@ describe('TunnelsService', () => {
   });
 
   afterEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
 
   describe('create', () => {
     it('должен создать туннель', async () => {
       const dto = { ip: '192.168.1.1', sshPort: 22, username: 'root' };
-      const mockTunnel = { id: 1, ...dto };
+      const node = { id: 'node-1', isMain: true };
+      const mockTunnel = { id: 1, ...dto, node, nodeId: node.id };
 
+      mockNodeRepo.findOne.mockResolvedValue(node);
       mockTunnelRepo.create.mockReturnValue(mockTunnel);
       mockTunnelRepo.save.mockResolvedValue(mockTunnel);
 
       const result = await service.create(dto);
 
       expect(result).toEqual(mockTunnel);
-      expect(tunnelRepo.create).toHaveBeenCalledWith(dto);
+      expect(tunnelRepo.create).toHaveBeenCalledWith({
+        ...dto,
+        node,
+        nodeId: node.id,
+      });
     });
   });
 
@@ -94,12 +119,13 @@ describe('TunnelsService', () => {
       const result = await service.findAll();
 
       expect(result).toEqual(mockTunnels);
-      expect(tunnelRepo.find).toHaveBeenCalledTimes(1);
+      expect(tunnelRepo.find).toHaveBeenCalledWith({ relations: ['node'] });
     });
   });
 
   describe('remove', () => {
     it('должен удалить туннель по ID', async () => {
+      mockSubscriptionRepo.find.mockResolvedValue([]);
       mockTunnelRepo.delete.mockResolvedValue({ affected: 1 });
 
       await service.remove(1);

@@ -19,6 +19,10 @@ export class CreateTunnelDto {
   @IsOptional()
   nodeId?: string;
 
+  @IsString()
+  @MinLength(1)
+  ip: string;
+
   @Type(() => Number)
   @IsInt()
   @Min(1)

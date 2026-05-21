@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Box,
   Button,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   FormControl,
+  FormHelperText,
   IconButton,
   InputLabel,
   MenuItem,
@@ -30,23 +32,38 @@ import {
   CheckCircle,
   Delete,
   Edit,
-  Refresh,
   Star,
   StarBorder,
   Sync,
 } from '@mui/icons-material';
+import api from '../api';
 import { nodesApi } from '../features/nodes/api';
 import type { NodeAuthType, NodePayload, NodeRecord } from '../types/node';
+import { getApiErrorMessage } from '../utils/errorHandlers';
+import { FlagIcon, FlagOptionLabel } from '../utils/flags';
 
 const emptyForm: NodePayload = {
   name: '',
   url: '',
-  authType: 'password',
+  ip: '',
+  flag: '',
+  authType: 'token',
   login: '',
   password: '',
   token: '',
   isMain: false,
 };
+
+interface CountryOption {
+  name: string;
+  code: string;
+  emoji: string;
+}
+
+const isValidIp = (value?: string) =>
+  !!value &&
+  (/^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(value.trim()) ||
+    /^([0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}$/i.test(value.trim()));
 
 export default function NodesPage() {
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
@@ -54,25 +71,30 @@ export default function NodesPage() {
   const [editing, setEditing] = useState<NodeRecord | null>(null);
   const [form, setForm] = useState<NodePayload>(emptyForm);
   const [checkingId, setCheckingId] = useState<string | null>(null);
+  const [countries, setCountries] = useState<CountryOption[]>([]);
+  const [detectingLocation, setDetectingLocation] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<NodeRecord | null>(null);
+  const [formErrors, setFormErrors] = useState<Partial<Record<keyof NodePayload, string>>>({});
   const [message, setMessage] = useState({
     open: false,
     type: 'success' as 'success' | 'error',
     text: '',
   });
 
-  const mainNode = useMemo(() => nodes.find((node) => node.isMain), [nodes]);
-
   const loadNodes = useCallback(async () => {
-    setNodes(await nodesApi.list());
+    const data = await nodesApi.list();
+    setNodes(Array.isArray(data) ? data : []);
   }, []);
 
   useEffect(() => {
     loadNodes();
+    api.get<CountryOption[]>('/settings/countries').then((res) => setCountries(Array.isArray(res.data) ? res.data : []));
   }, [loadNodes]);
 
   const openCreate = () => {
     setEditing(null);
     setForm(emptyForm);
+    setFormErrors({});
     setOpen(true);
   };
 
@@ -81,6 +103,8 @@ export default function NodesPage() {
     setForm({
       name: node.name,
       url: node.url || '',
+      ip: node.ip || '',
+      flag: node.flag || '',
       authType: node.authType,
       login: node.login || '',
       password: '',
@@ -88,45 +112,103 @@ export default function NodesPage() {
       isMain: node.isMain,
       version: node.version || '',
     });
+    setFormErrors({});
     setOpen(true);
   };
 
   const updateField = <K extends keyof NodePayload>(key: K, value: NodePayload[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+    setFormErrors((prev) => ({ ...prev, [key]: undefined }));
+  };
+
+  const validateForm = (requireSecrets = !editing) => {
+    const errors: Partial<Record<keyof NodePayload, string>> = {};
+
+    if (!form.name.trim()) errors.name = 'Введите название ноды';
+    if (!form.url.trim()) errors.url = 'Введите URL панели 3x-ui';
+    if (!isValidIp(form.ip)) errors.ip = 'Введите корректный IP ноды';
+    if (!form.flag) errors.flag = 'Выберите флаг ноды';
+
+    if (form.authType === 'password') {
+      if (!form.login?.trim()) errors.login = 'Введите логин';
+      if (requireSecrets && !form.password?.trim()) errors.password = 'Введите пароль';
+    }
+
+    if (form.authType === 'token' && requireSecrets && !form.token?.trim()) {
+      errors.token = 'Введите токен';
+    }
+
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const detectNodeLocation = async () => {
+    const url = form.url.trim();
+    if (!url) return;
+
+    setDetectingLocation(true);
+    try {
+      const result = await nodesApi.detectLocation(url.replace(/\/+$/, ''));
+      setForm((prev) => ({
+        ...prev,
+        ip: result.ip || prev.ip,
+        flag: result.flag || prev.flag,
+      }));
+      if (result.country || result.ip) {
+        setMessage({
+          open: true,
+          type: 'success',
+          text: `Определено: ${result.country || 'страна неизвестна'}${result.ip ? `, IP ${result.ip}` : ''}`,
+        });
+      }
+    } catch {
+      setMessage({ open: true, type: 'error', text: 'Не удалось определить страну ноды' });
+    } finally {
+      setDetectingLocation(false);
+    }
   };
 
   const saveNode = async () => {
-    if (!form.name.trim() || !form.url.trim()) {
-      setMessage({ open: true, type: 'error', text: 'Укажите название и URL ноды' });
+    if (!validateForm(!editing)) {
+      setMessage({ open: true, type: 'error', text: 'Заполните обязательные поля' });
       return;
     }
 
     const payload: NodePayload = {
       ...form,
       url: form.url.replace(/\/+$/, ''),
+      ip: form.ip || undefined,
+      flag: form.flag || undefined,
       login: form.authType === 'password' ? form.login : undefined,
       password: form.authType === 'password' && form.password ? form.password : undefined,
       token: form.authType === 'token' && form.token ? form.token : undefined,
     };
 
-    if (editing) {
-      await nodesApi.update(editing.id, payload);
-    } else {
-      await nodesApi.create(payload);
-    }
+    try {
+      if (editing) {
+        await nodesApi.update(editing.id, payload);
+      } else {
+        await nodesApi.create(payload);
+      }
 
-    setOpen(false);
-    setMessage({
-      open: true,
-      type: 'success',
-      text: editing ? 'Нода обновлена' : 'Нода добавлена',
-    });
-    loadNodes();
+      setOpen(false);
+      setMessage({
+        open: true,
+        type: 'success',
+        text: editing ? 'Нода обновлена' : 'Нода добавлена',
+      });
+      loadNodes();
+    } catch (error: unknown) {
+      const text =
+        (error as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        'Не удалось сохранить ноду';
+      setMessage({ open: true, type: 'error', text });
+    }
   };
 
   const checkFormConnection = async () => {
-    if (!form.name.trim() || !form.url.trim()) {
-      setMessage({ open: true, type: 'error', text: 'Укажите название и URL ноды' });
+    if (!validateForm(true)) {
+      setMessage({ open: true, type: 'error', text: 'Заполните обязательные поля для проверки подключения' });
       return;
     }
 
@@ -170,6 +252,22 @@ export default function NodesPage() {
     loadNodes();
   };
 
+  const removeNode = async () => {
+    if (!deleteTarget) return;
+    try {
+      await nodesApi.remove(deleteTarget.id);
+      setDeleteTarget(null);
+      setMessage({ open: true, type: 'success', text: 'Нода удалена' });
+      loadNodes();
+    } catch (error) {
+      setMessage({
+        open: true,
+        type: 'error',
+        text: getApiErrorMessage(error, 'Ошибка удаления ноды'),
+      });
+    }
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3, gap: 2 }}>
@@ -178,9 +276,9 @@ export default function NodesPage() {
         </Box>
         <Box>
           <Stack direction="row" spacing={1}>
-            <Button startIcon={<Sync />} variant="outlined" onClick={syncNodes}>
+            {/* <Button startIcon={<Sync />} variant="outlined" onClick={syncNodes}>
               Синхронизировать
-            </Button>
+            </Button> */}
             <Button startIcon={<Add />} variant="contained" onClick={openCreate}>
               Добавить
             </Button>
@@ -193,6 +291,8 @@ export default function NodesPage() {
           <TableHead>
             <TableRow>
               <TableCell>Название</TableCell>
+              <TableCell>Флаг</TableCell>
+              <TableCell>IP</TableCell>
               <TableCell>URL панели</TableCell>
               <TableCell>Авторизация</TableCell>
               <TableCell>Статус</TableCell>
@@ -211,17 +311,22 @@ export default function NodesPage() {
                   </Stack>
                 </TableCell>
                 <TableCell>
-                  {node.url}
+                  <FlagIcon flag={node.flag} />
                 </TableCell>
+                <TableCell>{node.ip || '-'}</TableCell>
+                <TableCell>{node.url}</TableCell>
                 <TableCell>{node.authType}</TableCell>
                 <TableCell>
                   {node.isMain && <Chip icon={<CheckCircle />} label="Основная" color="success" size="small" />}
                 </TableCell>
                 <TableCell align="right">
+                  {/* <IconButton disabled={checkingId === node.id} onClick={() => checkNode(node)}>
+                    {checkingId === node.id ? <CircularProgress size={20} /> : <CheckCircle />}
+                  </IconButton> */}
                   <IconButton onClick={() => openEdit(node)}>
                     <Edit />
                   </IconButton>
-                  <IconButton color="error" onClick={() => nodesApi.remove(node.id).then(loadNodes)}>
+                  <IconButton color="error" onClick={() => setDeleteTarget(node)}>
                     <Delete />
                   </IconButton>
                 </TableCell>
@@ -229,7 +334,7 @@ export default function NodesPage() {
             ))}
             {nodes.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ color: 'text.secondary' }}>
+                <TableCell colSpan={7} align="center" sx={{ color: 'text.secondary' }}>
                   Ноды не добавлены
                 </TableCell>
               </TableRow>
@@ -242,14 +347,55 @@ export default function NodesPage() {
         <DialogTitle>{editing ? 'Редактировать ноду' : 'Новая нода'}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
-            <TextField label="Название" value={form.name} onChange={(e) => updateField('name', e.target.value)} />
+            <TextField
+              label="Название"
+              required
+              value={form.name}
+              onChange={(e) => updateField('name', e.target.value)}
+              error={!!formErrors.name}
+              helperText={formErrors.name}
+            />
             <TextField
               label="URL панели 3x-ui"
-              helperText="Например: https://85.198.84.27:35366/2vIsDA5HanQ3R7JyIH"
+              required
+              helperText={formErrors.url || 'Например: https://85.198.84.27:35366/2vIsDA5HanQ3R7JyIH'}
               value={form.url}
               onChange={(e) => updateField('url', e.target.value)}
+              onBlur={detectNodeLocation}
+              error={!!formErrors.url}
+              InputProps={{ endAdornment: detectingLocation ? <CircularProgress size={18} /> : undefined }}
             />
-            <FormControl fullWidth>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+              <TextField
+                label="IP ноды"
+                required
+                fullWidth
+                value={form.ip || ''}
+                onChange={(e) => updateField('ip', e.target.value)}
+                error={!!formErrors.ip}
+                helperText={formErrors.ip}
+              />
+              <FormControl fullWidth required error={!!formErrors.flag}>
+                <InputLabel>Флаг</InputLabel>
+                <Select
+                  value={form.flag || ''}
+                  label="Флаг"
+                  onChange={(e) => updateField('flag', e.target.value)}
+                  renderValue={(value) => (
+                    <FlagOptionLabel flag={value} label={countries.find((country) => country.emoji === value)?.name || 'Флаг'} />
+                  )}
+                >
+                  <MenuItem value="">Без флага</MenuItem>
+                  {countries.map((country) => (
+                    <MenuItem key={country.code} value={country.emoji}>
+                      <FlagOptionLabel flag={country.emoji} code={country.code} label={country.name} />
+                    </MenuItem>
+                  ))}
+                </Select>
+                {formErrors.flag && <FormHelperText>{formErrors.flag}</FormHelperText>}
+              </FormControl>
+            </Stack>
+            <FormControl fullWidth required>
               <InputLabel>Тип авторизации</InputLabel>
               <Select
                 value={form.authType}
@@ -262,21 +408,35 @@ export default function NodesPage() {
             </FormControl>
             {form.authType === 'password' ? (
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                <TextField label="Логин" fullWidth value={form.login || ''} onChange={(e) => updateField('login', e.target.value)} />
+                <TextField
+                  label="Логин"
+                  required
+                  fullWidth
+                  value={form.login || ''}
+                  onChange={(e) => updateField('login', e.target.value)}
+                  error={!!formErrors.login}
+                  helperText={formErrors.login}
+                />
                 <TextField
                   label={editing ? 'Новый пароль' : 'Пароль'}
                   type="password"
+                  required={!editing}
                   fullWidth
                   value={form.password || ''}
                   onChange={(e) => updateField('password', e.target.value)}
+                  error={!!formErrors.password}
+                  helperText={formErrors.password || (editing ? 'Оставьте пустым, чтобы не менять пароль' : undefined)}
                 />
               </Stack>
             ) : (
               <TextField
                 label={editing ? 'Новый токен' : 'Токен'}
                 type="password"
+                required={!editing}
                 value={form.token || ''}
                 onChange={(e) => updateField('token', e.target.value)}
+                error={!!formErrors.token}
+                helperText={formErrors.token || (editing ? 'Оставьте пустым, чтобы не менять токен' : undefined)}
               />
             )}
             <Stack direction="row" alignItems="center" spacing={1}>
@@ -289,6 +449,17 @@ export default function NodesPage() {
           <Button onClick={checkFormConnection}>Проверить подключение</Button>
           <Button onClick={() => setOpen(false)}>Отмена</Button>
           <Button variant="contained" onClick={saveNode}>Сохранить</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)}>
+        <DialogTitle>Удалить ноду?</DialogTitle>
+        <DialogContent>
+          <Typography>Вы уверены, что хотите удалить ноду {deleteTarget?.name}?</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)}>Отмена</Button>
+          <Button color="error" variant="contained" onClick={removeNode}>Удалить</Button>
         </DialogActions>
       </Dialog>
 

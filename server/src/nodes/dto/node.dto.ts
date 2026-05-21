@@ -1,6 +1,7 @@
 import {
   IsBoolean,
   IsEnum,
+  IsIP,
   IsOptional,
   IsString,
   MinLength,
@@ -16,6 +17,18 @@ export class CreateNodeDto {
 
   @IsString()
   url: string;
+
+  @IsIP()
+  @IsOptional()
+  ip?: string;
+
+  @IsString()
+  @IsOptional()
+  domain?: string;
+
+  @IsString()
+  @IsOptional()
+  flag?: string;
 
   @IsEnum(NodeAuthType)
   authType: NodeAuthType;

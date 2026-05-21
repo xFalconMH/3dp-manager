@@ -56,7 +56,7 @@ describe('XuiService', () => {
   });
 
   afterEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
 
   describe('login', () => {
@@ -149,7 +149,16 @@ describe('XuiService', () => {
 
   describe('deleteInbound', () => {
     it('должен удалить инбаунд', async () => {
-      mockAxiosInstance.post.mockResolvedValue({ data: { success: true } });
+      mockSettingsRepo.find.mockResolvedValue([
+        { key: 'xui_url', value: 'http://localhost:3100' },
+        { key: 'xui_login', value: 'admin' },
+        { key: 'xui_password', value: 'password' },
+      ]);
+      mockAxiosInstance.post
+        .mockResolvedValueOnce({
+          headers: { 'set-cookie': ['session=abc123'] },
+        })
+        .mockResolvedValueOnce({ data: { success: true } });
 
       await service.deleteInbound(101);
 
@@ -159,16 +168,35 @@ describe('XuiService', () => {
     });
 
     it('должен обработать ошибку удаления', async () => {
-      mockAxiosInstance.post.mockRejectedValue(new Error('Not found'));
+      mockSettingsRepo.find.mockResolvedValue([
+        { key: 'xui_url', value: 'http://localhost:3100' },
+        { key: 'xui_login', value: 'admin' },
+        { key: 'xui_password', value: 'password' },
+      ]);
+      mockAxiosInstance.post
+        .mockResolvedValueOnce({
+          headers: { 'set-cookie': ['session=abc123'] },
+        })
+        .mockRejectedValueOnce(new Error('Not found'));
 
       await service.deleteInbound(999);
 
-      expect(mockAxiosInstance.post).toHaveBeenCalled();
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith(
+        '/panel/api/inbounds/del/999',
+      );
     });
   });
 
   describe('getNewX25519Cert', () => {
     it('должен получить Reality ключи', async () => {
+      mockSettingsRepo.find.mockResolvedValue([
+        { key: 'xui_url', value: 'http://localhost:3100' },
+        { key: 'xui_login', value: 'admin' },
+        { key: 'xui_password', value: 'password' },
+      ]);
+      mockAxiosInstance.post.mockResolvedValueOnce({
+        headers: { 'set-cookie': ['session=abc123'] },
+      });
       mockAxiosInstance.get.mockResolvedValue({
         data: {
           success: true,

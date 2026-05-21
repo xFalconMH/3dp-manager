@@ -34,6 +34,15 @@ export class Node {
   @Column({ nullable: true })
   host?: string;
 
+  @Column({ nullable: true })
+  domain?: string;
+
+  @Column({ nullable: true })
+  ip?: string;
+
+  @Column({ nullable: true })
+  flag?: string;
+
   @Column({ type: 'int', nullable: true })
   port?: number;
 

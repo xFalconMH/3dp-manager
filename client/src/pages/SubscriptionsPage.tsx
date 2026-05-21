@@ -1,25 +1,57 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  Box, Button, Typography, Paper, Table, TableBody, TableCell,
-  TableHead, TableRow, IconButton, Dialog, DialogTitle,
-  DialogContent, TextField, DialogActions, FormControl, Select,
-  InputAdornment, InputLabel, MenuItem, Snackbar, Alert,
-  useTheme,
-  useMediaQuery,
-  Menu,
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  FormControl,
+  IconButton,
+  InputAdornment,
+  InputLabel,
   ListItemIcon,
   ListItemText,
-  Checkbox,
+  Menu,
+  MenuItem,
+  Paper,
+  Select,
+  Snackbar,
   Stack,
-  Chip,
-  Divider,
-  Tooltip
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  TextField,
+  Tooltip,
+  Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
-import { Delete, Add, Link as LinkIcon, OpenInNew, ContentCopy, Dns, Router, Edit, MoreVert, Remove, Refresh, PauseCircleFilled, PlayCircleFilled } from '@mui/icons-material';
+import {
+  Add,
+  ContentCopy,
+  Delete,
+  Edit,
+  HelpOutline,
+  Link as LinkIcon,
+  MoreVert,
+  OpenInNew,
+  PauseCircleFilled,
+  PlayCircleFilled,
+  Refresh,
+  Remove,
+} from '@mui/icons-material';
 import api from '../api';
 import { copyToClipboard } from '../utils/copyToClipboard';
 import { Logger } from '../utils/logger';
 import type { NodeRecord } from '../types/node';
+import { FlagOptionLabel } from '../utils/flags';
 
 interface Subscription {
   id: string;
@@ -28,8 +60,6 @@ interface Subscription {
   inbounds: unknown[];
   inboundsConfig?: InboundConfigUI[];
   isAutoRotationEnabled?: boolean;
-  nodeId?: string;
-  relayServerId?: number;
 }
 
 interface Tunnel {
@@ -49,9 +79,22 @@ interface InboundConfigUI {
   link?: string;
   nodeId?: string;
   relayServerId?: string;
+  flag?: string;
+  name?: string;
+  certificateFile?: string;
+  keyFile?: string;
 }
 
-interface Domain { id: number; name: string; }
+interface Domain {
+  id: number;
+  name: string;
+}
+
+interface CountryOption {
+  name: string;
+  code: string;
+  emoji: string;
+}
 
 const CONNECTION_OPTIONS = [
   'vless-tcp-reality',
@@ -65,135 +108,156 @@ const CONNECTION_OPTIONS = [
   'custom',
 ];
 
-const patchLink = function (link: string, newHost: string): string {
-  if (link.startsWith('vmess://')) {
-    try {
-      const base64Part = link.substring(8);
-      const jsonStr = Buffer.from(base64Part, 'base64').toString('utf-8');
-      const config = JSON.parse(jsonStr);
-      config.add = newHost;
-      const newJsonStr = JSON.stringify(config);
-      const newBase64 = Buffer.from(newJsonStr).toString('base64');
-      return `vmess://${newBase64}`;
-    } catch {
-      return link;
-    }
-  } else if (link.startsWith('vless://') || link.startsWith('trojan://')) {
-    return link.replace(/@.*?:/, `@${newHost}:`);
-  } else if (link.startsWith('ss://')) {
-    if (link.includes('@')) {
-      return link.replace(/@.*?:/, `@${newHost}:`);
-    }
-    return link;
-  }
-  return link;
-};
-
 const generateId = () => Math.random().toString(36).substring(7);
 
-const getSubscriptionUrl = (uuid: string, tunnelId: string | number) => {
-  // Используем относительный путь - Nginx проксирует /bus/ на бэкенд
-  const tunnelPart = tunnelId !== 'main' ? `/${tunnelId}` : '';
-  const path = `/bus/${uuid}${tunnelPart}`;
-  // Для копирования нужен полный URL с origin
-  if (typeof window !== 'undefined') {
-    return `${window.location.origin}${path}`;
-  }
-  return path;
+const getSubscriptionUrl = (uuid: string) => {
+  const path = `/bus/${uuid}`;
+  return typeof window !== 'undefined' ? `${window.location.origin}${path}` : path;
 };
 
 export default function SubscriptionsPage() {
   const [subs, setSubs] = useState<Subscription[]>([]);
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
-  const [selectedServer, setSelectedServer] = useState<string | number>('main');
+  const [domains, setDomains] = useState<Domain[]>([]);
+  const [countries, setCountries] = useState<CountryOption[]>([]);
   const [menuAnchorEl, setMenuAnchorEl] = useState<null | HTMLElement>(null);
   const [activeSub, setActiveSub] = useState<Subscription | null>(null);
-  const [domains, setDomains] = useState<Domain[]>([]);
-  const [rotationSettings, setRotationSettings] = useState({
-    rotation_interval: '30',
-    rotation_status: 'active',
-    last_rotation_timestamp: '',
-  });
-  const [rotationLoading, setRotationLoading] = useState(false);
-  const openActionMenu = Boolean(menuAnchorEl);
-
-  // Состояния модального окна конструктора
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [inbounds, setInbounds] = useState<InboundConfigUI[]>([]);
   const [portErrors, setPortErrors] = useState<Record<string, string>>({});
-
-  // Состояния ссылок
   const [linksOpen, setLinksOpen] = useState(false);
   const [currentLinks, setCurrentLinks] = useState<string[]>([]);
-
-  // Snackbar state for notifications
-  const [snackbar, setSnackbar] = useState({ open: false, type: 'success' as 'success' | 'error', message: '' });
-
-  // Confirmation dialog state
+  const [createdSubscriptionId, setCreatedSubscriptionId] = useState<string | null>(null);
+  const [rotationLoading, setRotationLoading] = useState(false);
+  const [rotationSettings, setRotationSettings] = useState({
+    rotation_interval: '30',
+    rotation_status: 'active',
+    last_rotation_timestamp: '',
+  });
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    type: 'success' as 'success' | 'error',
+    message: '',
+  });
   const [confirmDialog, setConfirmDialog] = useState({
-    open: false, title: '', onConfirm: () => {},
-    confirmText: 'Удалить', confirmColor: 'error' as 'error' | 'primary'
+    open: false,
+    title: '',
+    confirmText: 'Удалить',
+    confirmColor: 'error' as 'error' | 'primary',
+    onConfirm: () => {},
   });
 
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const openActionMenu = Boolean(menuAnchorEl);
 
   const loadSubs = useCallback(async () => {
     try {
-      Logger.debug('Loading subscriptions...', 'Subs');
-      const { data } = await api.get('/subscriptions');
-      setSubs(data);
-      Logger.debug(`Loaded ${data.length} subscriptions`, 'Subs');
+      const [subsRes, tunnelsRes, nodesRes, domainsRes, countriesRes, settingsRes] =
+        await Promise.all([
+          api.get('/subscriptions'),
+          api.get('/tunnels'),
+          api.get<NodeRecord[]>('/nodes'),
+          api.get('/domains/all'),
+          api.get<CountryOption[]>('/settings/countries'),
+          api.get('/settings'),
+        ]);
 
-      const tunnelsRes = await api.get('/tunnels');
-      setTunnels(tunnelsRes.data.filter((el: Tunnel) => el.isInstalled));
-      Logger.debug(`Loaded ${tunnelsRes.data.filter((el: Tunnel) => el.isInstalled).length} active tunnels`, 'Subs');
-
-      const nodesRes = await api.get<NodeRecord[]>('/nodes');
-      setNodes(nodesRes.data);
-      Logger.debug(`Loaded ${nodesRes.data.length} nodes`, 'Subs');
-
-      const allDomains = await api.get('/domains/all');
-      setDomains(allDomains.data);
-      Logger.debug(`Loaded ${allDomains.data.length} domains`, 'Subs');
-
-      const settingsRes = await api.get('/settings');
+      setSubs(Array.isArray(subsRes.data) ? subsRes.data : []);
+      setTunnels(
+        Array.isArray(tunnelsRes.data)
+          ? tunnelsRes.data.filter((tunnel: Tunnel) => tunnel.isInstalled)
+          : [],
+      );
+      setNodes(Array.isArray(nodesRes.data) ? nodesRes.data : []);
+      setDomains(Array.isArray(domainsRes.data) ? domainsRes.data : []);
+      setCountries(Array.isArray(countriesRes.data) ? countriesRes.data : []);
       setRotationSettings((prev) => ({ ...prev, ...settingsRes.data }));
     } catch (error) {
-      Logger.error('Failed to load', 'Subs', error);
+      Logger.error('Failed to load subscriptions data', 'Subs', error);
       throw error;
     }
   }, []);
 
-  useEffect(() => { loadSubs(); }, [loadSubs]);
+  useEffect(() => {
+    loadSubs();
+  }, [loadSubs]);
 
-  const handleActionMenuClick = (event: React.MouseEvent<HTMLButtonElement>, sub: Subscription) => {
-    setMenuAnchorEl(event.currentTarget);
-    setActiveSub(sub);
+  const getDefaultNodeId = () =>
+    nodes.find((node) => node.isMain)?.id || nodes[0]?.id || '';
+
+  const getNodeAddress = (nodeId?: string) => {
+    const node = nodes.find((item) => item.id === (nodeId || getDefaultNodeId()));
+    if (!node) return '';
+    if (node.domain) return node.domain;
+    if (node.ip) return node.ip;
+    if (node.host) return node.host;
+    try {
+      return new URL(node.url).hostname;
+    } catch {
+      return node.url;
+    }
   };
 
-  const handleActionMenuClose = () => {
-    setMenuAnchorEl(null);
-    setActiveSub(null);
+  const getHysteriaCertDefaults = (nodeId?: string) => {
+    const address = getNodeAddress(nodeId);
+    return {
+      certificateFile: address ? `/root/cert/${address}/fullchain.pem` : '',
+      keyFile: address ? `/root/cert/${address}/privkey.pem` : '',
+    };
+  };
+
+  const getNodeFlag = (nodeId?: string) =>
+    nodes.find((node) => node.id === (nodeId || getDefaultNodeId()))?.flag || '';
+
+  const getRelayOptions = (nodeId?: string) =>
+    tunnels.filter((tunnel) => tunnel.nodeId === (nodeId || getDefaultNodeId()));
+
+  const isValidPort = (value: string) =>
+    value === 'random' || (/^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535);
+
+  const createInbound = (type = 'vless-tcp-reality'): InboundConfigUI => {
+    const nodeId = getDefaultNodeId();
+    const certDefaults = type === 'hysteria2-udp' ? getHysteriaCertDefaults(nodeId) : {};
+    return {
+      id: generateId(),
+      type,
+      port: 'random',
+      sni: type === 'hysteria2-udp' ? '' : 'random',
+      link: '',
+      nodeId,
+      flag: getNodeFlag(nodeId),
+      name: '',
+      ...certDefaults,
+    };
   };
 
   const handleOpenCreate = () => {
+    if (nodes.length === 0) {
+      setSnackbar({ open: true, type: 'error', message: 'Создайте хотя бы одну ноду!' });
+      return;
+    }
+    if (domains.length === 0) {
+      setSnackbar({ open: true, type: 'error', message: 'Создайте хотя бы один домен!' });
+      return;
+    }
+
     setEditingId(null);
     setName('');
     setInbounds([
-      { id: generateId(), type: 'hysteria2-udp', port: 'random', sni: 'random', link: '' },
-      { id: generateId(), type: 'vless-xhttp-reality', port: 'random', sni: 'random', link: '' },
-      { id: generateId(), type: 'vless-tcp-reality', port: 'random', sni: 'random', link: '' },
-      { id: generateId(), type: 'vless-tcp-reality', port: 'random', sni: 'random', link: '' },
-      { id: generateId(), type: 'vless-tcp-reality', port: 'random', sni: 'random', link: '' },
-      { id: generateId(), type: 'vless-tcp-reality', port: 'random', sni: 'random', link: '' },
-      { id: generateId(), type: 'vless-grpc-reality', port: 'random', sni: 'random', link: '' },
-      { id: generateId(), type: 'vless-ws', port: 'random', sni: 'random', link: '' },
-      { id: generateId(), type: 'vmess-tcp', port: 'random', sni: 'random', link: '' },
-      { id: generateId(), type: 'shadowsocks-tcp', port: 'random', sni: 'random', link: '' },
+      createInbound('hysteria2-udp'),
+      createInbound('vless-xhttp-reality'),
+      createInbound('vless-tcp-reality'),
+      createInbound('vless-tcp-reality'),
+      createInbound('vless-tcp-reality'),
+      createInbound('vless-tcp-reality'),
+      createInbound('vless-grpc-reality'),
+      createInbound('vless-ws'),
+      createInbound('vmess-tcp'),
+      createInbound('shadowsocks-tcp'),
     ]);
     setPortErrors({});
     setOpen(true);
@@ -202,76 +266,116 @@ export default function SubscriptionsPage() {
   const handleOpenEdit = (sub: Subscription) => {
     setEditingId(sub.id);
     setName(sub.name);
-
-    if (sub.inboundsConfig && sub.inboundsConfig.length > 0) {
-      setInbounds(sub.inboundsConfig.map(i => ({
-        id: generateId(),
-        type: i.type || 'vless-tcp-reality',
-        port: i.port ? i.port.toString() : 'random',
-        sni: i.sni || 'random',
-        link: i.link || '',
-        nodeId: i.nodeId || '',
-        relayServerId: i.relayServerId ? i.relayServerId.toString() : ''
-      })));
-    } else {
-      setInbounds([{ id: generateId(), type: 'vless-tcp-reality', port: 'random', sni: 'random', link: '' }]);
-    }
-
+    setInbounds(
+      (sub.inboundsConfig?.length ? sub.inboundsConfig : [createInbound()]).map((item) => {
+        const nodeId = item.nodeId || getDefaultNodeId();
+        const certDefaults = getHysteriaCertDefaults(nodeId);
+        return {
+          id: generateId(),
+          type: item.type || 'vless-tcp-reality',
+          port: item.port ? item.port.toString() : 'random',
+          sni: item.type === 'hysteria2-udp' ? '' : item.sni || 'random',
+          link: item.link || '',
+          nodeId,
+          relayServerId: item.relayServerId ? item.relayServerId.toString() : '',
+          flag: item.flag || getNodeFlag(nodeId),
+          name: item.name || '',
+          certificateFile:
+            item.type === 'hysteria2-udp'
+              ? item.certificateFile || certDefaults.certificateFile
+              : undefined,
+          keyFile:
+            item.type === 'hysteria2-udp' ? item.keyFile || certDefaults.keyFile : undefined,
+        };
+      }),
+    );
     setPortErrors({});
     setOpen(true);
   };
 
   const handleInboundChange = (id: string, field: keyof InboundConfigUI, value: string) => {
-    setInbounds(prev => prev.map(inb => {
-      if (inb.id !== id) return inb;
-      const next = { ...inb, [field]: value };
-      if (field === 'nodeId') {
-        next.relayServerId = '';
-      }
-      if (field === 'type' && value === 'custom') {
-        next.nodeId = '';
-        next.relayServerId = '';
-      }
-      return next;
-    }));
-    if (field === 'port' || (field === 'type' && value === 'custom')) {
-      setPortErrors(prev => { const n = { ...prev }; delete n[id]; return n; });
+    setInbounds((prev) =>
+      prev.map((inbound) => {
+        if (inbound.id !== id) return inbound;
+        const next = { ...inbound, [field]: value };
+
+        if (field === 'nodeId') {
+          next.relayServerId = '';
+          next.flag = getNodeFlag(value);
+          if (next.type === 'hysteria2-udp') {
+            Object.assign(next, getHysteriaCertDefaults(value));
+          }
+        }
+
+        if (field === 'type' && value === 'custom') {
+          next.nodeId = '';
+          next.relayServerId = '';
+          next.flag = '';
+          next.name = '';
+          next.certificateFile = '';
+          next.keyFile = '';
+        }
+
+        if (field === 'type' && value === 'hysteria2-udp') {
+          next.sni = '';
+          const defaults = getHysteriaCertDefaults(next.nodeId);
+          next.certificateFile = next.certificateFile || defaults.certificateFile;
+          next.keyFile = next.keyFile || defaults.keyFile;
+        }
+
+        if (field === 'type' && value !== 'custom' && !next.nodeId) {
+          next.nodeId = getDefaultNodeId();
+          next.flag = getNodeFlag(next.nodeId);
+        }
+
+        return next;
+      }),
+    );
+
+    if (field === 'port') {
+      setPortErrors((prev) => {
+        const next = { ...prev };
+        if (isValidPort(value)) delete next[id];
+        else next[id] = 'Порт: число 1-65535 или random';
+        return next;
+      });
     }
   };
 
   const addInbound = () => {
-    if (inbounds.length < 20) {
-      setInbounds([...inbounds, { id: generateId(), type: 'vless-tcp-reality', port: 'random', sni: 'random', link: '' }]);
-    }
+    if (inbounds.length < 20) setInbounds((prev) => [...prev, createInbound()]);
   };
 
   const removeInbound = (id?: string) => {
-    if (id) {
-      if (inbounds.length > 1) {
-        setInbounds(inbounds.filter(inb => inb.id !== id));
-        setPortErrors(prev => {
-          const n = { ...prev };
-          delete n[id];
-          return n;
-        });
-      }
-    } else {
-      setInbounds([
-        {
-          id: crypto.randomUUID(),
-          type: 'vless-tcp-reality',
-          port: 'random',
-          sni: 'random',
-          link: ''
-        }
-      ]);
+    if (!id) {
+      setInbounds([{ ...createInbound(), id: crypto.randomUUID() }]);
       setPortErrors({});
+      return;
     }
+    if (inbounds.length <= 1) return;
+    setInbounds((prev) => prev.filter((inbound) => inbound.id !== id));
+    setPortErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
   const handleSave = async () => {
-    if (Object.keys(portErrors).length > 0) {
-      setSnackbar({ open: true, type: 'error', message: 'Пожалуйста, исправьте ошибки с портами' });
+    const nextPortErrors = inbounds.reduce<Record<string, string>>((acc, inbound) => {
+      if (inbound.type !== 'custom' && !isValidPort(inbound.port)) {
+        acc[inbound.id] = 'Порт: число 1-65535 или random';
+      }
+      return acc;
+    }, {});
+    setPortErrors(nextPortErrors);
+
+    if (Object.keys(nextPortErrors).length > 0) {
+      setSnackbar({
+        open: true,
+        type: 'error',
+        message: 'Пожалуйста, исправьте ошибки с портами',
+      });
       return;
     }
     if (!name.trim()) {
@@ -281,55 +385,64 @@ export default function SubscriptionsPage() {
 
     const payload = {
       name,
-      inboundsConfig: inbounds.map(i => {
-        if (i.type === 'custom') {
-          return {
-            type: i.type,
-            link: i.link,
-          };
-        }
-        return {
-          type: i.type,
-          port: i.port === 'random' ? 'random' : parseInt(i.port),
-          sni: i.sni,
-          nodeId: i.nodeId || undefined,
-          relayServerId: i.relayServerId ? parseInt(i.relayServerId, 10) : undefined
-        };
-      })
+      inboundsConfig: inbounds.map((inbound) =>
+        inbound.type === 'custom'
+          ? { type: inbound.type, link: inbound.link }
+          : {
+              type: inbound.type,
+              port: inbound.port === 'random' ? 'random' : parseInt(inbound.port, 10),
+              sni: inbound.type === 'hysteria2-udp' ? undefined : inbound.sni,
+              nodeId: inbound.nodeId || undefined,
+              relayServerId: inbound.relayServerId
+                ? parseInt(inbound.relayServerId, 10)
+                : undefined,
+              flag: inbound.flag || getNodeFlag(inbound.nodeId) || undefined,
+              name: inbound.name?.trim() || undefined,
+              certificateFile:
+                inbound.type === 'hysteria2-udp'
+                  ? inbound.certificateFile?.trim() || undefined
+                  : undefined,
+              keyFile:
+                inbound.type === 'hysteria2-udp'
+                  ? inbound.keyFile?.trim() || undefined
+                  : undefined,
+            },
+      ),
     };
 
     try {
-      Logger.debug(`${editingId ? 'Updating' : 'Creating'} subscription`, 'Subs', payload);
       if (editingId) {
         await api.put(`/subscriptions/${editingId}`, payload);
-        Logger.debug(`Updated subscription ${editingId}`, 'Subs');
       } else {
-        await api.post('/subscriptions', payload);
-        Logger.debug('Created subscription', 'Subs');
+        const res = await api.post<{ id?: string }>('/subscriptions', payload);
+        setCreatedSubscriptionId(res.data?.id || null);
       }
       setOpen(false);
       loadSubs();
-      setSnackbar({ open: true, type: 'success', message: editingId ? 'Подписка обновлена' : 'Подписка создана' });
+      setSnackbar({
+        open: true,
+        type: 'success',
+        message: editingId ? 'Подписка обновлена' : 'Подписка создана',
+      });
     } catch (error: unknown) {
-      const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Произошла ошибка при сохранении';
-      Logger.error(`Save error: ${message}`, 'Subs');
+      const message =
+        (error as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        'Произошла ошибка при сохранении';
       setSnackbar({ open: true, type: 'error', message });
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = (id: string) => {
     setConfirmDialog({
       open: true,
       title: 'Удалить подписку и все соединения?',
       confirmText: 'Удалить',
       confirmColor: 'error',
       onConfirm: async () => {
-        Logger.debug(`Deleting subscription: ${id}`, 'Subs');
         await api.delete(`/subscriptions/${id}`);
-        Logger.debug(`Deleted subscription ${id}`, 'Subs');
         loadSubs();
         setSnackbar({ open: true, type: 'success', message: 'Подписка удалена' });
-      }
+      },
     });
   };
 
@@ -337,43 +450,42 @@ export default function SubscriptionsPage() {
     try {
       await api.put('/subscriptions/bulk-auto-rotation', {
         subscriptionIds: [subscriptionId],
-        enabled
+        enabled,
       });
-      setSubs(prev => prev.map(s =>
-        s.id === subscriptionId ? { ...s, isAutoRotationEnabled: enabled } : s
-      ));
+      setSubs((prev) =>
+        prev.map((sub) =>
+          sub.id === subscriptionId ? { ...sub, isAutoRotationEnabled: enabled } : sub,
+        ),
+      );
       setSnackbar({
         open: true,
         type: 'success',
-        message: enabled ? 'Авторотация включена' : 'Авторотация выключена'
+        message: enabled ? 'Авторотация включена' : 'Авторотация выключена',
       });
     } catch (error: unknown) {
-      const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Ошибка обновления';
-      Logger.error(`Toggle auto-rotation error: ${message}`, 'Subs');
+      const message =
+        (error as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        'Ошибка обновления';
       setSnackbar({ open: true, type: 'error', message });
       loadSubs();
     }
   };
 
-  const handleManualRotate = async (sub: Subscription) => {
+  const handleManualRotate = (sub: Subscription) => {
     setConfirmDialog({
       open: true,
       title: `Обновить подписку "${sub.name}" сейчас?`,
       confirmText: 'Обновить',
       confirmColor: 'primary',
       onConfirm: async () => {
-        try {
-          Logger.debug(`Starting manual rotation for subscription: ${sub.id}`, 'Subs');
-          const res = await api.post(`/rotation/rotate-one/${sub.id}`);
-          Logger.debug('Manual rotation completed', 'Subs');
-          setSnackbar({ open: true, type: 'success', message: res.data.message || 'Ротация выполнена' });
-          loadSubs();
-        } catch (error: unknown) {
-          const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Ошибка ротации';
-          Logger.error(`Manual rotation error: ${message}`, 'Subs');
-          setSnackbar({ open: true, type: 'error', message });
-        }
-      }
+        const res = await api.post(`/rotation/rotate-one/${sub.id}`);
+        setSnackbar({
+          open: true,
+          type: res.data?.success ? 'success' : 'error',
+          message: res.data?.message || 'Ротация выполнена',
+        });
+        loadSubs();
+      },
     });
   };
 
@@ -385,36 +497,29 @@ export default function SubscriptionsPage() {
   const toggleRotationService = async () => {
     const nextStatus = rotationSettings.rotation_status === 'stopped' ? 'active' : 'stopped';
     const nextSettings = { ...rotationSettings, rotation_status: nextStatus };
-    try {
-      await saveRotationSettings(nextSettings);
-      setSnackbar({
-        open: true,
-        type: 'success',
-        message: nextStatus === 'active' ? 'Ротация включена' : 'Ротация остановлена'
-      });
-    } catch (error) {
-      Logger.error('Rotation status update error', 'Subs', error);
-      setSnackbar({ open: true, type: 'error', message: 'Не удалось изменить статус ротации' });
-    }
+    await saveRotationSettings(nextSettings);
+    setSnackbar({
+      open: true,
+      type: 'success',
+      message: nextStatus === 'active' ? 'Ротация включена' : 'Ротация остановлена',
+    });
   };
 
   const saveRotationInterval = async () => {
     const interval = parseInt(rotationSettings.rotation_interval, 10);
     if (Number.isNaN(interval) || interval < 10) {
-      setSnackbar({ open: true, type: 'error', message: 'Минимальный интервал ротации — 10 минут' });
+      setSnackbar({
+        open: true,
+        type: 'error',
+        message: 'Минимальный интервал ротации - 10 минут',
+      });
       return;
     }
-
-    try {
-      await saveRotationSettings(rotationSettings);
-      setSnackbar({ open: true, type: 'success', message: 'Интервал ротации сохранён' });
-    } catch (error) {
-      Logger.error('Rotation interval update error', 'Subs', error);
-      setSnackbar({ open: true, type: 'error', message: 'Не удалось сохранить интервал' });
-    }
+    await saveRotationSettings(rotationSettings);
+    setSnackbar({ open: true, type: 'success', message: 'Интервал ротации сохранен' });
   };
 
-  const rotateAllNow = async () => {
+  const rotateAllNow = () => {
     setConfirmDialog({
       open: true,
       title: 'Сгенерировать инбаунды сейчас для всех активных подписок?',
@@ -427,16 +532,13 @@ export default function SubscriptionsPage() {
           setSnackbar({
             open: true,
             type: data?.success ? 'success' : 'error',
-            message: data?.message || 'Ротация завершена'
+            message: data?.message || 'Ротация завершена',
           });
           loadSubs();
-        } catch (error: unknown) {
-          const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Ошибка ротации';
-          setSnackbar({ open: true, type: 'error', message });
         } finally {
           setRotationLoading(false);
         }
-      }
+      },
     });
   };
 
@@ -454,76 +556,53 @@ export default function SubscriptionsPage() {
   const getNextRotationDate = () => {
     if (rotationSettings.rotation_status === 'stopped') return 'Пауза';
     if (!rotationSettings.last_rotation_timestamp) return 'Ожидание';
-
     const interval = parseInt(rotationSettings.rotation_interval, 10) || 30;
-    const next = new Date(Number(rotationSettings.last_rotation_timestamp) + interval * 60000);
-    return next.toLocaleString('ru-RU', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    return new Date(Number(rotationSettings.last_rotation_timestamp) + interval * 60000).toLocaleString(
+      'ru-RU',
+      { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' },
+    );
   };
 
   const showLinks = (sub: Subscription) => {
-    let links: string[] = [];
-    if (selectedServer === 'main') {
-      links = sub.inbounds?.map(i => (i as { link?: string }).link).filter(Boolean) || [];
-    } else {
-      const tunnelIndex = +selectedServer - 1;
-      const host = tunnels[tunnelIndex]?.domain?.length > 0 ? tunnels[tunnelIndex].domain : tunnels[tunnelIndex].ip;
-      links = sub.inbounds?.map(i => patchLink((i as { link?: string }).link || '', host)).filter(Boolean) || [];
-    }
-    if (links.length === 0) {
-      setCurrentLinks(['Нет активных ссылок (ждите ротации)']);
-    } else {
-      setCurrentLinks(links);
-    }
+    const links = sub.inbounds?.map((item) => (item as { link?: string }).link).filter(Boolean) || [];
+    setCurrentLinks(links.length ? links : ['Нет активных ссылок (ждите ротации)']);
     setLinksOpen(true);
   };
 
-  const handleCopyLink = async (uuid: string, tunnelId: string | number) => {
-    await copyToClipboard(getSubscriptionUrl(uuid, tunnelId));
+  const handleCopyLink = async (uuid: string) => {
+    await copyToClipboard(getSubscriptionUrl(uuid));
     setSnackbar({ open: true, type: 'success', message: 'Ссылка на подписку скопирована' });
   };
 
-  const getDefaultNodeId = () => nodes.find((node) => node.isMain)?.id || '';
+  const handleGenerateCreatedSubscription = async () => {
+    if (!createdSubscriptionId) return;
+    const res = await api.post(`/rotation/rotate-one/${createdSubscriptionId}`);
+    setSnackbar({
+      open: true,
+      type: res.data?.success ? 'success' : 'error',
+      message: res.data?.message || 'Ротация выполнена',
+    });
+    setCreatedSubscriptionId(null);
+    loadSubs();
+  };
 
-  const getRelayOptions = (inboundNodeId?: string) => {
-    const effectiveNodeId = inboundNodeId || getDefaultNodeId();
-    return tunnels.filter((tunnel) => tunnel.nodeId === effectiveNodeId);
+  const openActionMenuFor = (event: React.MouseEvent<HTMLButtonElement>, sub: Subscription) => {
+    setMenuAnchorEl(event.currentTarget);
+    setActiveSub(sub);
+  };
+
+  const closeActionMenu = () => {
+    setMenuAnchorEl(null);
+    setActiveSub(null);
   };
 
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
         <Typography variant={isMobile ? 'h5' : 'h4'}>Подписки</Typography>
-        {tunnels.length > 0 && (
-          <FormControl variant='standard' size="small" sx={{ minWidth: 220, justifyContent: 'center' }}>
-            <Select
-              value={selectedServer}
-              onChange={(e) => setSelectedServer(e.target.value)}
-              startAdornment={
-                <InputAdornment position="start">
-                  {selectedServer === 'main' ? <Dns fontSize="small" /> : <Router fontSize="small" />}
-                </InputAdornment>
-              }
-            >
-              <MenuItem value="main">
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>Основной сервер</Typography>
-              </MenuItem>
-              {tunnels.map((t) => (
-                <MenuItem key={t.id} value={t.id.toString()}>
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{t.name}</Typography>
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        )}
-        <Box>
-          <Button variant="contained" startIcon={<Add />} onClick={handleOpenCreate}>Создать</Button>
-        </Box>
+        <Button variant="contained" startIcon={<Add />} onClick={handleOpenCreate}>
+          Создать
+        </Button>
       </Box>
 
       <Paper sx={{ p: 2, mb: 3 }}>
@@ -539,16 +618,11 @@ export default function SubscriptionsPage() {
               sx={{ mt: 1 }}
             />
           </Box>
-          <Box>
-          <Tooltip title={rotationSettings.rotation_status === 'stopped' ? "Возобновить ротацию" : "Поставить на паузу"}>
-            <IconButton
-              onClick={toggleRotationService}
-              size="small"
-            >
+          <Tooltip title={rotationSettings.rotation_status === 'stopped' ? 'Возобновить ротацию' : 'Поставить на паузу'}>
+            <IconButton onClick={toggleRotationService} size="small">
               {rotationSettings.rotation_status === 'stopped' ? <PlayCircleFilled fontSize="large" /> : <PauseCircleFilled fontSize="large" />}
             </IconButton>
           </Tooltip>
-          </Box>
           <Divider flexItem orientation={isMobile ? 'horizontal' : 'vertical'} />
           <Box>
             <Typography variant="subtitle2" color="text.secondary">Последняя генерация</Typography>
@@ -567,12 +641,8 @@ export default function SubscriptionsPage() {
             sx={{ width: { xs: '100%', md: 150 } }}
           />
           <Box sx={{ flexGrow: 1 }} />
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-            <Button variant="outlined" onClick={saveRotationInterval}>Сохранить интервал</Button>
-            <Button variant="contained" loading={rotationLoading} onClick={rotateAllNow}>
-              Обновить все
-            </Button>
-          </Stack>
+          <Button variant="outlined" onClick={saveRotationInterval}>Сохранить интервал</Button>
+          <Button variant="contained" disabled={rotationLoading} onClick={rotateAllNow}>Обновить все</Button>
         </Stack>
       </Paper>
 
@@ -603,215 +673,148 @@ export default function SubscriptionsPage() {
                 <TableCell align="right">
                   {!isMobile && (
                     <>
-                      <IconButton
-                        color="primary"
-                        onClick={() => handleCopyLink(sub.uuid, selectedServer)}
-                        title="Копировать ссылку"
-                      >
+                      <IconButton color="primary" onClick={() => handleCopyLink(sub.uuid)} title="Копировать ссылку">
                         <ContentCopy />
                       </IconButton>
-                      <IconButton
-                        color="primary"
-                        onClick={() => window.open(getSubscriptionUrl(sub.uuid, selectedServer), '_blank')}
-                        title="Открыть подписку"
-                      >
+                      <IconButton color="primary" onClick={() => window.open(getSubscriptionUrl(sub.uuid), '_blank')} title="Открыть подписку">
                         <OpenInNew />
                       </IconButton>
                     </>
                   )}
-
-                  {/* Кнопка "Три точки" для вызова меню действий */}
-                  <IconButton onClick={(e) => handleActionMenuClick(e, sub)}>
-                    <MoreVert />
-                  </IconButton>
+                  <IconButton onClick={(e) => openActionMenuFor(e, sub)}><MoreVert /></IconButton>
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
-        {subs.length === 0 && <Typography sx={{ p: 2 }} color='textSecondary' textAlign='center'>Нет подписок</Typography>}
+        {subs.length === 0 && (
+          <Typography sx={{ p: 2 }} color="textSecondary" textAlign="center">
+            Нет подписок
+          </Typography>
+        )}
       </Paper>
 
-      <Menu
-        anchorEl={menuAnchorEl}
-        open={openActionMenu}
-        onClose={handleActionMenuClose}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-      >
-        {isMobile && activeSub && (
-          <MenuItem onClick={() => handleCopyLink(activeSub.uuid, selectedServer)}>
-            <ListItemIcon><ContentCopy fontSize="small" color="primary" /></ListItemIcon>
-            <ListItemText>Копировать ссылку</ListItemText>
-          </MenuItem>
-        )}
-        {isMobile && activeSub && (
-          <MenuItem onClick={() => window.open(getSubscriptionUrl(activeSub.uuid, selectedServer), '_blank')}>
-            <ListItemIcon><OpenInNew fontSize="small" color="primary" /></ListItemIcon>
-            <ListItemText>Открыть подписку</ListItemText>
-          </MenuItem>
-        )}
-
-        {activeSub && (
-          <MenuItem onClick={() => showLinks(activeSub)}>
-            <ListItemIcon><LinkIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Показать конфиги</ListItemText>
-          </MenuItem>
-        )}
-        {activeSub && (
-          <MenuItem onClick={() => handleManualRotate(activeSub)}>
-            <ListItemIcon><Refresh fontSize="small" color="primary" /></ListItemIcon>
-            <ListItemText>Обновить сейчас</ListItemText>
-          </MenuItem>
-        )}
-        {activeSub && (
-          <MenuItem onClick={() => handleOpenEdit(activeSub)}>
-            <ListItemIcon><Edit fontSize="small" /></ListItemIcon>
-            <ListItemText>Редактировать</ListItemText>
-          </MenuItem>
-        )}
-        {activeSub && (
-          <MenuItem onClick={() => handleDelete(activeSub.id)}>
-            <ListItemIcon><Delete fontSize="small" color="error" /></ListItemIcon>
-            <ListItemText sx={{ color: 'error.main' }}>Удалить</ListItemText>
-          </MenuItem>
-        )}
+      <Menu anchorEl={menuAnchorEl} open={openActionMenu} onClose={closeActionMenu}>
+        {isMobile && activeSub && <MenuItem onClick={() => handleCopyLink(activeSub.uuid)}><ListItemIcon><ContentCopy fontSize="small" color="primary" /></ListItemIcon><ListItemText>Копировать ссылку</ListItemText></MenuItem>}
+        {isMobile && activeSub && <MenuItem onClick={() => window.open(getSubscriptionUrl(activeSub.uuid), '_blank')}><ListItemIcon><OpenInNew fontSize="small" color="primary" /></ListItemIcon><ListItemText>Открыть подписку</ListItemText></MenuItem>}
+        {activeSub && <MenuItem onClick={() => showLinks(activeSub)}><ListItemIcon><LinkIcon fontSize="small" /></ListItemIcon><ListItemText>Показать конфиги</ListItemText></MenuItem>}
+        {activeSub && <MenuItem onClick={() => handleManualRotate(activeSub)}><ListItemIcon><Refresh fontSize="small" color="primary" /></ListItemIcon><ListItemText>Обновить сейчас</ListItemText></MenuItem>}
+        {activeSub && <MenuItem onClick={() => handleOpenEdit(activeSub)}><ListItemIcon><Edit fontSize="small" /></ListItemIcon><ListItemText>Редактировать</ListItemText></MenuItem>}
+        {activeSub && <MenuItem onClick={() => handleDelete(activeSub.id)}><ListItemIcon><Delete fontSize="small" color="error" /></ListItemIcon><ListItemText sx={{ color: 'error.main' }}>Удалить</ListItemText></MenuItem>}
       </Menu>
 
-      {/* Модальное окно создания / редактирования */}
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="md" fullWidth disableRestoreFocus>
-        <DialogTitle variant='h5'>{editingId ? 'Редактировать подписку' : 'Новая подписка'}</DialogTitle>
-        <DialogContent dividers>
-          <TextField
-            autoFocus margin="dense" label="Имя подписки" fullWidth
-            value={name} onChange={(e) => setName(e.target.value)}
-            sx={{ mb: 2 }}
-          />
-
-          <Typography variant="h6" sx={{ mb: 2 }}>
-            Инбаунды ({inbounds.length}/20)
-          </Typography>
-
-          {inbounds.map((inb, index) => (
-            <Box key={inb.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 2, p: 2 }}>
-              <Typography sx={{ mt: 1, minWidth: 30, fontWeight: 'bold' }}>#{index + 1}</Typography>
-
-              <FormControl size="small" sx={{ minWidth: 185 }}>
-                <InputLabel>Тип</InputLabel>
-                <Select
-                  value={inb.type}
-                  label="Тип"
-                  sx={{ minWidth: '185px' }}
-                  onChange={(e) => handleInboundChange(inb.id, 'type', e.target.value)}
-                >
-                  {CONNECTION_OPTIONS.map(opt => <MenuItem key={opt} value={opt}>{opt}</MenuItem>)}
-                </Select>
-              </FormControl>
-
-              {inb.type === 'custom' ? (
-                // Поле для кастомной ссылки
-                <FormControl size="small" sx={{ flexGrow: 1 }}>
-                  <TextField
-                    size="small"
-                    label="Ссылка на подключение"
-                    placeholder="vless://..."
-                    value={inb.link || ''}
-                    onChange={(e) => handleInboundChange(inb.id, 'link', e.target.value)}
-                    fullWidth
-                  />
-                </FormControl>
-              ) : (
-                <>
-                  <FormControl size="small" sx={{ minWidth: 170 }}>
-                    <InputLabel>Нода</InputLabel>
-                    <Select
-                      value={inb.nodeId || ''}
-                      label="Нода"
-                      onChange={(e) => handleInboundChange(inb.id, 'nodeId', e.target.value)}
-                    >
-                      <MenuItem value="">Основная нода</MenuItem>
-                      {nodes.map((node) => (
-                        <MenuItem key={node.id} value={node.id}>
-                          {node.name}{node.isMain ? ' (основная)' : ''}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-
-                  <FormControl size="small" sx={{ minWidth: 170 }}>
-                    <InputLabel>Relay</InputLabel>
-                    <Select
-                      value={inb.relayServerId || ''}
-                      label="Relay"
-                      onChange={(e) => handleInboundChange(inb.id, 'relayServerId', e.target.value)}
-                    >
-                      <MenuItem value="">Без relay</MenuItem>
-                      {getRelayOptions(inb.nodeId).map((tunnel) => (
-                        <MenuItem key={tunnel.id} value={tunnel.id.toString()}>
-                          {tunnel.name}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-
-                  <FormControl size="small" sx={{ minWidth: 150 }}>
-                    <TextField
-                      size="small"
-                      label="Порт"
-                      placeholder="random или порт"
-                      value={inb.port}
-                      onChange={(e) => handleInboundChange(inb.id, 'port', e.target.value)}
-                      error={!!portErrors[inb.id]}
-                      helperText={portErrors[inb.id] || ""}
-                      sx={{ width: 140 }}
-                    />
-                  </FormControl>
-
-                  <FormControl size="small" sx={{ minWidth: 150 }}>
-                    <InputLabel>SNI</InputLabel>
-                    <Select
-                      value={inb.sni}
-                      label="SNI"
-                      onChange={(e) => handleInboundChange(inb.id, 'sni', e.target.value)}
-                    >
-                      <MenuItem value="random">random</MenuItem>
-                      {domains.map(opt => <MenuItem key={opt.id} value={opt.name}>{opt.name}</MenuItem>)}
-                    </Select>
-                  </FormControl>
-                </>
-              )}
-
-              <IconButton
-                color="primary"
-                onClick={() => removeInbound(inb.id)}
-                disabled={inbounds.length <= 1}
-                sx={{ mt: 0.5 }}
+        <DialogTitle variant="h5">{editingId ? 'Редактировать подписку' : 'Новая подписка'}</DialogTitle>
+        <DialogContent dividers sx={{ maxHeight: '72vh' }}>
+          <TextField autoFocus margin="dense" label="Имя подписки" fullWidth value={name} onChange={(e) => setName(e.target.value)} sx={{ mb: 2 }} />
+          <Typography variant="h6" sx={{ mb: 2 }}>Инбаунды ({inbounds.length}/20)</Typography>
+          <Box sx={{ maxHeight: '52vh', overflow: 'auto', pr: 1 }}>
+            {inbounds.map((inbound, index) => (
+              <Box
+                key={inbound.id}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 2,
+                  mb: 2,
+                  p: 2,
+                  flexWrap: 'nowrap',
+                  width: 'fit-content',
+                  minWidth: inbound.type === 'custom' ? 780 : inbound.type === 'hysteria2-udp' ? 1540 : 1260,
+                  border: 1,
+                  borderColor: 'divider',
+                  borderRadius: 1,
+                }}
               >
-                <Delete />
-              </IconButton>
-            </Box>
-          ))}
-
-          <Button
-            variant="outlined"
-            size='small'
-            startIcon={<Add />}
-            onClick={addInbound}
-            disabled={inbounds.length >= 20}
-          >
-            Добавить инбаунд
-          </Button>
-          <Button
-            variant="outlined"
-            color="error"
-            size="small"
-            startIcon={<Remove />}
-            sx={{ ml: 0.5 }}
-            onClick={() => removeInbound()}
-          >
-            Удалить все
-          </Button>
-
+                <Typography sx={{ mt: 1, width: 34, flexShrink: 0, fontWeight: 'bold' }}>#{index + 1}</Typography>
+                <FormControl size="small" sx={{ width: 185, flexShrink: 0 }}>
+                  <InputLabel>Тип</InputLabel>
+                  <Select value={inbound.type} label="Тип" onChange={(e) => handleInboundChange(inbound.id, 'type', e.target.value)}>
+                    {CONNECTION_OPTIONS.map((option) => <MenuItem key={option} value={option}>{option}</MenuItem>)}
+                  </Select>
+                </FormControl>
+                {inbound.type === 'custom' ? (
+                  <TextField size="small" label="Ссылка на подключение" placeholder="vless://..." value={inbound.link || ''} onChange={(e) => handleInboundChange(inbound.id, 'link', e.target.value)} sx={{ width: 460, flexShrink: 0 }} />
+                ) : (
+                  <>
+                    <FormControl size="small" sx={{ width: 170, flexShrink: 0 }}>
+                      <InputLabel>Нода</InputLabel>
+                      <Select value={inbound.nodeId || ''} label="Нода" onChange={(e) => handleInboundChange(inbound.id, 'nodeId', e.target.value)}>
+                        <MenuItem value="">Основная нода</MenuItem>
+                        {nodes.map((node) => <MenuItem key={node.id} value={node.id}>{node.name}{node.isMain ? ' (основная)' : ''}</MenuItem>)}
+                      </Select>
+                    </FormControl>
+                    <FormControl size="small" sx={{ width: 170, flexShrink: 0 }}>
+                      <InputLabel>Relay</InputLabel>
+                      <Select value={inbound.relayServerId || ''} label="Relay" onChange={(e) => handleInboundChange(inbound.id, 'relayServerId', e.target.value)}>
+                        <MenuItem value="">Без relay</MenuItem>
+                        {getRelayOptions(inbound.nodeId).map((tunnel) => <MenuItem key={tunnel.id} value={tunnel.id.toString()}>{tunnel.name}</MenuItem>)}
+                      </Select>
+                    </FormControl>
+                    <FormControl size="small" sx={{ width: 170, flexShrink: 0 }}>
+                      <InputLabel>Флаг</InputLabel>
+                      <Select value={inbound.flag || getNodeFlag(inbound.nodeId)} label="Флаг" onChange={(e) => handleInboundChange(inbound.id, 'flag', e.target.value)} renderValue={(value) => <FlagOptionLabel flag={value} label={countries.find((country) => country.emoji === value)?.name || 'Флаг'} />}>
+                        <MenuItem value="">Без флага</MenuItem>
+                        {countries.map((country) => <MenuItem key={country.code} value={country.emoji}><FlagOptionLabel flag={country.emoji} code={country.code} label={country.name} /></MenuItem>)}
+                      </Select>
+                    </FormControl>
+                    <TextField size="small" label="Название" value={inbound.name || ''} onChange={(e) => handleInboundChange(inbound.id, 'name', e.target.value)} sx={{ width: 180, flexShrink: 0 }} />
+                    <TextField size="small" label="Порт" placeholder="random или порт" value={inbound.port} onChange={(e) => handleInboundChange(inbound.id, 'port', e.target.value)} error={!!portErrors[inbound.id]} helperText={portErrors[inbound.id] || ''} sx={{ width: 150, flexShrink: 0 }} />
+                    {inbound.type === 'hysteria2-udp' && (
+                      <>
+                        <TextField
+                          size="small"
+                          label="Сертификат"
+                          value={inbound.certificateFile || ''}
+                          onChange={(e) => handleInboundChange(inbound.id, 'certificateFile', e.target.value)}
+                          sx={{ width: 360, flexShrink: 0 }}
+                          InputProps={{
+                            endAdornment: (
+                              <InputAdornment position="end">
+                                <Tooltip title="Путь к сертификату должен существовать на выбранной ноде. По умолчанию используется путь Let's Encrypt.">
+                                  <HelpOutline fontSize="small" color="action" />
+                                </Tooltip>
+                              </InputAdornment>
+                            ),
+                          }}
+                        />
+                        <TextField
+                          size="small"
+                          label="Приватный ключ"
+                          value={inbound.keyFile || ''}
+                          onChange={(e) => handleInboundChange(inbound.id, 'keyFile', e.target.value)}
+                          sx={{ width: 360, flexShrink: 0 }}
+                          InputProps={{
+                            endAdornment: (
+                              <InputAdornment position="end">
+                                <Tooltip title="Путь к приватному ключу должен существовать на выбранной ноде. По умолчанию используется путь Let's Encrypt.">
+                                  <HelpOutline fontSize="small" color="action" />
+                                </Tooltip>
+                              </InputAdornment>
+                            ),
+                          }}
+                        />
+                      </>
+                    )}
+                    {inbound.type !== 'hysteria2-udp' && (
+                      <FormControl size="small" sx={{ width: 150, flexShrink: 0 }}>
+                        <InputLabel>SNI</InputLabel>
+                        <Select value={inbound.sni} label="SNI" onChange={(e) => handleInboundChange(inbound.id, 'sni', e.target.value)}>
+                          <MenuItem value="random">random</MenuItem>
+                          {domains.map((domain) => <MenuItem key={domain.id} value={domain.name}>{domain.name}</MenuItem>)}
+                        </Select>
+                      </FormControl>
+                    )}
+                  </>
+                )}
+                <IconButton color="primary" onClick={() => removeInbound(inbound.id)} disabled={inbounds.length <= 1} sx={{ mt: 0.5, flexShrink: 0 }}>
+                  <Delete />
+                </IconButton>
+              </Box>
+            ))}
+          </Box>
+          <Button variant="outlined" size="small" startIcon={<Add />} onClick={addInbound} disabled={inbounds.length >= 20}>Добавить инбаунд</Button>
+          <Button variant="outlined" color="error" size="small" startIcon={<Remove />} sx={{ ml: 0.5 }} onClick={() => removeInbound()}>Удалить все</Button>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Отмена</Button>
@@ -819,15 +822,10 @@ export default function SubscriptionsPage() {
         </DialogActions>
       </Dialog>
 
-      {/* Модальное окно ссылок */}
       <Dialog open={linksOpen} onClose={() => setLinksOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Активные ссылки</DialogTitle>
         <DialogContent>
-          <TextField
-            multiline fullWidth rows={10}
-            value={currentLinks.join('\n\n')}
-            slotProps={{ input: { readOnly: true, sx: { fontFamily: 'monospace', fontSize: 12 } } }}
-          />
+          <TextField multiline fullWidth rows={10} value={currentLinks.join('\n\n')} slotProps={{ input: { readOnly: true, sx: { fontFamily: 'monospace', fontSize: 12 } } }} />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => copyToClipboard(currentLinks.join('\n'))}>Копировать все</Button>
@@ -835,39 +833,28 @@ export default function SubscriptionsPage() {
         </DialogActions>
       </Dialog>
 
-      {/* Confirmation Dialog */}
       <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ ...confirmDialog, open: false })}>
         <DialogTitle>Подтверждение</DialogTitle>
-        <DialogContent>
-          <Typography>{confirmDialog.title}</Typography>
-        </DialogContent>
+        <DialogContent><Typography>{confirmDialog.title}</Typography></DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmDialog({ ...confirmDialog, open: false })}>Отмена</Button>
-          <Button
-            onClick={() => {
-              confirmDialog.onConfirm();
-              setConfirmDialog({ ...confirmDialog, open: false });
-            }}
-            variant="contained"
-            color={confirmDialog.confirmColor}
-          >
+          <Button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog({ ...confirmDialog, open: false }); }} variant="contained" color={confirmDialog.confirmColor}>
             {confirmDialog.confirmText}
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar notifications */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert
-          onClose={() => setSnackbar({ ...snackbar, open: false })}
-          severity={snackbar.type}
-          sx={{ width: '100%' }}
-        >
+      <Dialog open={createdSubscriptionId !== null} onClose={() => setCreatedSubscriptionId(null)}>
+        <DialogTitle>Подписка создана</DialogTitle>
+        <DialogContent><Typography>Сгенерировать подключения сейчас?</Typography></DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCreatedSubscriptionId(null)}>Нет</Button>
+          <Button onClick={handleGenerateCreatedSubscription} variant="contained">Да</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={() => setSnackbar({ ...snackbar, open: false })} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        <Alert onClose={() => setSnackbar({ ...snackbar, open: false })} severity={snackbar.type} sx={{ width: '100%' }}>
           {snackbar.message}
         </Alert>
       </Snackbar>

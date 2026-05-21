@@ -8,6 +8,8 @@ import { SubscriptionsService } from 'src/subscriptions/subscriptions.service';
 import { Subscription } from 'src/subscriptions/entities/subscription.entity';
 import { XuiService } from 'src/xui/xui.service';
 import { CreateSubscriptionDto } from 'src/subscriptions/dto/create-subscription.dto';
+import { Node } from 'src/nodes/entities/node.entity';
+import { Tunnel } from 'src/tunnels/entities/tunnel.entity';
 
 describe('SubscriptionsService', () => {
   let service: SubscriptionsService;
@@ -23,6 +25,19 @@ describe('SubscriptionsService', () => {
     remove: jest.fn(),
   };
 
+  const mockNodeRepo = {
+    findOne: jest.fn(),
+    createQueryBuilder: jest.fn(() => ({
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getOne: jest.fn(),
+    })),
+  };
+
+  const mockTunnelRepo = {
+    findOne: jest.fn(),
+  };
+
   const mockXuiService = {
     deleteInbound: jest.fn(),
   };
@@ -36,6 +51,14 @@ describe('SubscriptionsService', () => {
           useValue: mockSubRepo,
         },
         {
+          provide: getRepositoryToken(Node),
+          useValue: mockNodeRepo,
+        },
+        {
+          provide: getRepositoryToken(Tunnel),
+          useValue: mockTunnelRepo,
+        },
+        {
           provide: XuiService,
           useValue: mockXuiService,
         },
@@ -47,6 +70,7 @@ describe('SubscriptionsService', () => {
       getRepositoryToken(Subscription),
     );
     xuiService = module.get<XuiService>(XuiService);
+    mockXuiService.deleteInbound.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -86,7 +110,7 @@ describe('SubscriptionsService', () => {
 
       expect(result).toEqual(mockSubs);
       expect(subRepo.find).toHaveBeenCalledWith({
-        relations: ['inbounds'],
+        relations: ['inbounds', 'node', 'relayServer'],
         order: { createdAt: 'DESC' },
       });
     });
@@ -128,6 +152,8 @@ describe('SubscriptionsService', () => {
         uuid: expect.any(String),
         inboundsConfig: createDto.inboundsConfig,
         isAutoRotationEnabled: true,
+        node: null,
+        relayServer: null,
       });
       expect(subRepo.save).toHaveBeenCalledWith(mockSubscription);
       expect(result).toEqual(mockSubscription);
@@ -197,7 +223,7 @@ describe('SubscriptionsService', () => {
 
       expect(subRepo.findOne).toHaveBeenCalledWith({
         where: { id: 'test-id' },
-        relations: ['inbounds'],
+        relations: ['inbounds', 'node', 'relayServer'],
       });
       expect(subRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'New Name' }),
@@ -329,8 +355,8 @@ describe('SubscriptionsService', () => {
 
       await service.remove('test-id');
 
-      expect(xuiService.deleteInbound).toHaveBeenCalledWith(101);
-      expect(xuiService.deleteInbound).toHaveBeenCalledWith(102);
+      expect(xuiService.deleteInbound).toHaveBeenCalledWith(101, undefined);
+      expect(xuiService.deleteInbound).toHaveBeenCalledWith(102, undefined);
       expect(subRepo.remove).toHaveBeenCalledWith(subWithInbounds);
     });
 

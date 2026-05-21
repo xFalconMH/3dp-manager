@@ -422,38 +422,87 @@ export class InboundBuilderService {
     };
   }
 
-  buildHysteria2Inbound(params: { port: number; uuid: string; sni: string }) {
+  buildHysteria2Inbound(params: {
+    port: number;
+    uuid: string;
+    sni: string;
+    certificateFile?: string;
+    keyFile?: string;
+  }) {
     const { port, uuid, sni } = params;
+    const certificateFile =
+      params.certificateFile || `/root/cert/${sni}/fullchain.pem`;
+    const keyFile =
+      params.keyFile || `/root/cert/${sni}/privkey.pem`;
+    const obfsPassword = crypto.randomBytes(8).toString('hex');
     return {
       enable: true,
       port,
-      protocol: 'hysteria2',
+      protocol: 'hysteria',
       remark: 'hysteria2-udp',
       settings: JSON.stringify({
         clients: [
           {
-            password: uuid,
+            auth: uuid,
             email: uuid,
             enable: true,
-            limitIp: 0,
-            totalGB: 0,
-            expiryTime: 0,
-            reset: 0,
           },
         ],
-        masquerade: `${sni}:443`,
+        version: 2,
       }),
       streamSettings: JSON.stringify({
-        network: 'udp',
+        network: 'hysteria',
         security: 'tls',
+        finalmask: {
+          udp: [
+            {
+              settings: {
+                password: obfsPassword,
+              },
+              type: 'salamander',
+            },
+          ],
+        },
+        hysteriaSettings: {
+          auth: uuid,
+          masquerade: {
+            content: '',
+            dir: '',
+            headers: {},
+            insecure: true,
+            rewriteHost: false,
+            statusCode: 0,
+            type: 'proxy',
+            url: 'https://google.com',
+          },
+          udpIdleTimeout: 60,
+          version: 2,
+        },
         tlsSettings: {
           serverName: sni,
           alpn: ['h3'],
+          certificates: [
+            {
+              buildChain: false,
+              certificateFile,
+              keyFile,
+              oneTimeLoading: false,
+              usage: 'encipherment',
+            },
+          ],
+          cipherSuites: '',
+          disableSystemRoot: false,
+          echForceQuery: 'none',
+          echServerKeys: '',
+          enableSessionResumption: false,
+          maxVersion: '1.3',
+          minVersion: '1.2',
+          rejectUnknownSni: false,
         },
       }),
       sniffing: JSON.stringify({
         enabled: false,
-        destOverride: ['http', 'tls', 'quic'],
+        destOverride: ['http', 'tls', 'quic', 'fakedns'],
         metadataOnly: false,
         routeOnly: false,
       }),
@@ -487,6 +536,7 @@ export class InboundBuilderService {
       case 'trojan':
         link = this.buildTrojanLink(inbound, sni, idOrPass);
         break;
+      case 'hysteria':
       case 'hysteria2':
         link = this.buildHysteria2PanelLink(inbound, sni, idOrPass, flagEmoji);
         break;
@@ -645,13 +695,38 @@ export class InboundBuilderService {
   ) {
     const stream = JSON.parse(inbound.streamSettings) as {
       tlsSettings?: { serverName?: string };
+      finalmask?: { udp?: Array<{ type?: string; settings?: { password?: string } }> };
     };
+    const settings = JSON.parse(inbound.settings) as {
+      clients?: Array<{ auth?: string; password?: string }>;
+    };
+    const auth = settings.clients?.[0]?.auth || settings.clients?.[0]?.password || password;
+    const finalmask = stream.finalmask?.udp?.[0];
     const params = new URLSearchParams();
-    params.set('insecure', '0');
+    params.set('insecure', '1');
+    params.set('security', 'tls');
+    params.set('fp', 'chrome');
+    params.set('alpn', 'h3');
+
+    const fmConfig = {
+      udp: [
+        {
+          type: finalmask.type,
+          settings: {
+            password: finalmask.settings.password,
+          },
+        },
+      ],
+    };
+    params.set('fm', JSON.stringify(fmConfig));
     params.set('sni', stream.tlsSettings?.serverName || serverAddress);
+    if (finalmask?.type) params.set('obfs', finalmask.type);
+    if (finalmask?.settings?.password) {
+      params.set('obfs-password', finalmask.settings.password);
+    }
 
     return (
-      `hy2://${password}@${serverAddress}:${inbound.port}/?${params.toString()}` +
+      `hy2://${auth}@${serverAddress}:${inbound.port}/?${params.toString()}` +
       `#${flagEmoji}%20${encodeURIComponent(inbound.remark || '')}`
     );
   }
@@ -694,10 +769,27 @@ export class InboundBuilderService {
     }
 
     const params = new URLSearchParams();
-    params.set('insecure', '0');
+    params.set('insecure', '1');
+    params.set('security', 'tls');
+    params.set('fp', 'chrome');
+    params.set('alpn', 'h3');
+
     params.set('sni', serverAddress);
+
     params.set('obfs', obfs);
     params.set('obfs-password', obfsPass);
+
+    const fmConfig = {
+      udp: [
+        {
+          type: obfs,
+          settings: {
+            password: obfsPass,
+          },
+        },
+      ],
+    };
+    params.set('fm', JSON.stringify(fmConfig));
 
     return `hy2://${auth}@${serverAddress}:${port}/?${params.toString()}#${remark}`;
   }

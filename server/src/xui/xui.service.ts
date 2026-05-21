@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import * as https from 'https';
+import * as http from 'http';
 import { Setting } from '../settings/entities/setting.entity';
 import {
   XuiResponse,
@@ -29,7 +30,7 @@ export class XuiService {
   ) {
     this.api = axios.create({
       timeout: 15000,
-      httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+      proxy: false,
       withCredentials: true,
     });
 
@@ -61,9 +62,18 @@ export class XuiService {
     return axios.create({
       baseURL,
       timeout: 15000,
-      httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+      proxy: false,
+      ...this.getAgentConfig(baseURL),
       withCredentials: true,
     });
+  }
+
+  private getAgentConfig(baseURL?: string) {
+    if (!baseURL || baseURL.startsWith('https://')) {
+      return { httpsAgent: new https.Agent({ rejectUnauthorized: false }) };
+    }
+
+    return { httpAgent: new http.Agent() };
   }
 
   private async createAuthenticatedApi(node?: Node): Promise<AxiosInstance | null> {
@@ -121,6 +131,9 @@ export class XuiService {
 
       this.logger.log(`Attempting login to 3x-ui: ${config['xui_url']}`);
       this.api.defaults.baseURL = config['xui_url'];
+      const agentConfig = this.getAgentConfig(config['xui_url']);
+      this.api.defaults.httpAgent = agentConfig.httpAgent;
+      this.api.defaults.httpsAgent = agentConfig.httpsAgent;
 
       const res = await this.api.post<LoginResponse>('/login', {
         username: config['xui_login'],
@@ -211,16 +224,35 @@ export class XuiService {
     return null;
   }
 
-  async deleteInbound(id: number, node?: Node) {
+  async deleteInbound(id: number, node?: Node): Promise<boolean> {
+    if (!id || id <= 0) {
+      this.logger.debug(`Skipping 3x-ui inbound deletion for non-remote id: ${id}`);
+      return true;
+    }
+
     try {
       const api = await this.createAuthenticatedApi(node);
-      if (!api) return;
-      await api.post(`/panel/api/inbounds/del/${id}`);
-      this.logger.debug(`Инбаунд ${id} удален`);
+      if (!api) {
+        this.logger.error(`3x-ui authentication failed before deleting inbound ${id}`);
+        return false;
+      }
+      const res = await api.post<XuiResponse<unknown>>(
+        `/panel/api/inbounds/del/${id}`,
+      );
+      if (!res.data?.success) {
+        this.logger.error(
+          `3x-ui rejected inbound deletion ${id}: ${res.data?.msg || 'unknown error'}`,
+        );
+        return false;
+      }
+      this.logger.debug(`Inbound ${id} deleted`);
+      return true;
     } catch (e) {
       const error = e as AxiosError;
       this.logger.error(`Ошибка удаления инбаунда ${id}: ${error.message}`);
     }
+
+    return false;
   }
 
   async checkConnection(
@@ -234,7 +266,8 @@ export class XuiService {
       const tempApi = axios.create({
         baseURL: url,
         timeout: 5000,
-        httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+        proxy: false,
+        ...this.getAgentConfig(url),
         withCredentials: true,
       });
 

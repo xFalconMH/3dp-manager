@@ -143,7 +143,7 @@ export class RotationService implements OnModuleInit {
         isEnabled: true,
         isAutoRotationEnabled: true,
       },
-      relations: ['inbounds', 'node', 'relayServer'],
+      relations: ['inbounds', 'inbounds.node', 'node', 'relayServer'],
     });
     if (subscriptions.length === 0) {
       return { success: false, message: 'Нет активных подписок для ротации' };
@@ -156,7 +156,13 @@ export class RotationService implements OnModuleInit {
     }
 
     for (const sub of subscriptions) {
-      await this.rotateSubscription(sub, domains, defaultNode);
+      const rotated = await this.rotateSubscription(sub, domains, defaultNode);
+      if (!rotated) {
+        return {
+          success: false,
+          message: 'Failed to delete old inbounds',
+        };
+      }
     }
 
     this.logger.debug('Ротация завершена.');
@@ -174,7 +180,16 @@ export class RotationService implements OnModuleInit {
     if (sub.inbounds && sub.inbounds.length > 0) {
       for (const inbound of sub.inbounds) {
         if (inbound.xuiId && inbound.xuiId > 0) {
-          await this.xuiService.deleteInbound(inbound.xuiId, inbound.node);
+          const isDeleted = await this.xuiService.deleteInbound(
+            inbound.xuiId,
+            await this.resolveInboundNode(inbound),
+          );
+          if (!isDeleted) {
+            this.logger.error(
+              `Failed to delete old inbound ${inbound.xuiId}; rotation for subscription ${sub.id} is aborted`,
+            );
+            return false;
+          }
         }
         await this.inboundRepo.delete(inbound.id);
       }
@@ -186,7 +201,7 @@ export class RotationService implements OnModuleInit {
       this.logger.error(
         'Не удалось получить Reality ключи, пропускаем подписку',
       );
-      return;
+      return false;
     }
 
     const usedPorts = new Set<number>();
@@ -196,7 +211,7 @@ export class RotationService implements OnModuleInit {
     const flag = await this.settingRepo.findOne({
       where: { key: 'xui_geo_flag' },
     });
-    const flagEmoji = flag?.value ?? '%F0%9F%92%AF';
+    const defaultFlagEmoji = flag?.value ?? '%F0%9F%92%AF';
 
     // Получаем конфиг или пустой массив
     const inboundsConfig = sub.inboundsConfig || [];
@@ -209,15 +224,20 @@ export class RotationService implements OnModuleInit {
         sub.node,
         defaultNode,
       );
-      const relayServer = await this.resolveRelay(
+      const resolvedRelay = await this.resolveRelay(
         config.relayServerId,
         sub.relayServer,
       );
+      const relayServer =
+        resolvedRelay && this.isRelayAvailableForNode(resolvedRelay, targetNode)
+          ? resolvedRelay
+          : undefined;
       const targetAddress =
         relayServer?.domain ||
         relayServer?.ip ||
         this.getNodeAddress(targetNode) ||
         serverAddress;
+      const flagEmoji = config.flag || targetNode?.flag || defaultFlagEmoji;
 
       let sni = '';
 
@@ -250,33 +270,39 @@ export class RotationService implements OnModuleInit {
         }
         usedPorts.add(port);
 
+        const hysteriaSni = this.getNodeAddress(targetNode) || serverAddress;
         const hysteriaConfig = this.inboundBuilder.buildHysteria2Inbound({
           port,
           uuid,
-          sni,
+          sni: hysteriaSni,
+          certificateFile: config.certificateFile,
+          keyFile: config.keyFile,
         });
+        if (config.name?.trim()) {
+          hysteriaConfig.remark = config.name.trim();
+        }
         const xuiId = await this.xuiService.addInbound(
           hysteriaConfig,
           targetNode,
         );
-        const link =
-          xuiId && hysteriaConfig
-            ? this.inboundBuilder.buildInboundLink(
-                hysteriaConfig,
-                targetAddress,
-                uuid,
-                flagEmoji,
-              )
-            : this.inboundBuilder.buildHysteria2Link(
-                targetAddress,
-                sni,
-                flagEmoji + '%20hysteria2-udp',
-              );
+        if (!xuiId) {
+          this.logger.warn(
+            'Hysteria2 inbound was not created by 3x-ui; skipping subscription link for this inbound',
+          );
+          continue;
+        }
+
+        const link = this.inboundBuilder.buildInboundLink(
+          hysteriaConfig,
+          targetAddress,
+          uuid,
+          flagEmoji,
+        );
         const newInbound = this.inboundRepo.create({
-          xuiId: xuiId || 0,
+          xuiId,
           port,
           protocol: 'hysteria2',
-          remark: 'hysteria2-udp',
+          remark: hysteriaConfig.remark,
           link: link,
           subscription: sub,
           node: targetNode,
@@ -350,6 +376,10 @@ export class RotationService implements OnModuleInit {
           continue;
       }
 
+      if (config.name?.trim()) {
+        xuiConfig.remark = config.name.trim();
+      }
+
       const xuiId = await this.xuiService.addInbound(xuiConfig, targetNode);
 
       if (xuiId && xuiConfig) {
@@ -379,6 +409,8 @@ export class RotationService implements OnModuleInit {
         await this.inboundRepo.save(newInbound);
       }
     }
+
+    return true;
   }
 
   private pickDomain(list: Domain[]): string {
@@ -413,7 +445,7 @@ export class RotationService implements OnModuleInit {
 
     const sub = await this.subRepo.findOne({
       where: { id: subscriptionId },
-      relations: ['inbounds', 'node', 'relayServer'],
+      relations: ['inbounds', 'inbounds.node', 'node', 'relayServer'],
     });
 
     if (!sub) {
@@ -437,7 +469,13 @@ export class RotationService implements OnModuleInit {
       return { success: false, message: 'Список доменов пуст!' };
     }
 
-    await this.rotateSubscription(sub, domains, defaultNode);
+    const rotated = await this.rotateSubscription(sub, domains, defaultNode);
+    if (!rotated) {
+      return {
+        success: false,
+        message: 'Failed to delete old inbounds',
+      };
+    }
 
     this.logger.debug(`Ручная ротация подписки ${subscriptionId} завершена.`);
     return { success: true, message: 'Ротация успешно выполнена' };
@@ -472,18 +510,33 @@ export class RotationService implements OnModuleInit {
     );
   }
 
-  private async resolveRelay(relayServerId?: number, subscriptionRelay?: Tunnel) {
-    if (!relayServerId) return subscriptionRelay ?? undefined;
+  private async resolveInboundNode(inbound: Inbound) {
+    if (!inbound.nodeId) return inbound.node;
 
     return (
-      (await this.tunnelRepo.findOne({ where: { id: relayServerId } })) ??
-      subscriptionRelay ??
-      undefined
+      (await this.nodeRepo
+        .createQueryBuilder('node')
+        .addSelect('node.password')
+        .addSelect('node.token')
+        .where('node.id = :nodeId', { nodeId: inbound.nodeId })
+        .getOne()) ?? inbound.node
     );
+  }
+
+  private async resolveRelay(relayServerId?: number, subscriptionRelay?: Tunnel) {
+    if (!relayServerId) return subscriptionRelay ?? undefined;
+    return (await this.tunnelRepo.findOne({ where: { id: relayServerId } })) ?? undefined;
+  }
+
+  private isRelayAvailableForNode(relay: Tunnel, node?: Node) {
+    if (!relay.nodeId) return true;
+    return Boolean(node?.id && relay.nodeId === node.id);
   }
 
   private getNodeAddress(node?: Node) {
     if (!node) return undefined;
+    if (node.domain) return node.domain;
+    if (node.ip) return node.ip;
     if (node.host) return node.host;
 
     try {

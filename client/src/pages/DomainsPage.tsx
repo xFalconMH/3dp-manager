@@ -50,6 +50,7 @@ export default function DomainsPage() {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [newDomain, setNewDomain] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const emptyDomainsNotified = useRef(false);
   const [totalCount, setTotalCount] = useState(0);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -203,6 +204,13 @@ export default function DomainsPage() {
 
       setDomains(data.data);
       setTotalCount(data.total);
+      if (data.total === 0 && !emptyDomainsNotified.current) {
+        emptyDomainsNotified.current = true;
+        setSnackbar({ open: true, type: 'error', message: 'Создайте хотя бы один домен!' });
+      }
+      if (data.total > 0) {
+        emptyDomainsNotified.current = false;
+      }
       Logger.debug(`Loaded ${data.data.length} domains (total: ${data.total})`, 'Domains');
     } catch (error) {
       Logger.error('Failed to load', 'Domains', error);

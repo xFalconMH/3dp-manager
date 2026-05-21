@@ -21,6 +21,11 @@ export class NodesController {
     return this.nodesService.checkPayload(dto);
   }
 
+  @Post('detect-location')
+  detectLocation(@Body() body: { url: string }) {
+    return this.nodesService.detectLocation(body.url);
+  }
+
   @Put(':id')
   update(@Param('id') id: string, @Body() dto: UpdateNodeDto) {
     return this.nodesService.update(id, dto);

@@ -23,9 +23,9 @@ const drawerWidth = 240;
 
 const menuItems = [
   { text: 'Подписки', icon: <People />, path: '/' },
-  { text: 'Домены', icon: <Dns />, path: '/domains' },
   { text: 'Ноды', icon: <Hub />, path: '/nodes' },
   { text: 'Relay серверы', icon: <SwapHoriz />, path: '/tunnels' },
+  { text: 'Домены', icon: <Dns />, path: '/domains' },
   { text: 'Настройки', icon: <Settings />, path: '/settings' },
 ];
 

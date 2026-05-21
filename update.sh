@@ -250,6 +250,40 @@ ensure_bus_location() {
   mv "$tmp_file" "$nginx_conf"
 }
 
+remove_hysteria_mount() {
+  local compose_file="$1"
+  [[ -f "$compose_file" ]] || return 0
+
+  local tmp_file
+  tmp_file="$(mktemp)"
+
+  awk '
+    /^[[:space:]]*volumes:[[:space:]]*$/ {
+      pending_volumes = $0
+      next
+    }
+
+    /\/etc\/hysteria\/config\.yaml:\/etc\/hysteria\/config\.yaml:ro/ {
+      pending_volumes = ""
+      next
+    }
+
+    {
+      if (pending_volumes != "") {
+        print pending_volumes
+        pending_volumes = ""
+      }
+      print $0
+    }
+
+    END {
+      if (pending_volumes != "") print pending_volumes
+    }
+  ' "$compose_file" > "$tmp_file"
+
+  mv "$tmp_file" "$compose_file"
+}
+
 need_root() {
   [[ $EUID -eq 0 ]] || die "Запускать только от root"
 }
@@ -287,6 +321,7 @@ check_and_fix_credentials || true
 #################################
 ensure_nginx_api_timeouts "$PROJECT_DIR/client/nginx-client.conf"
 ensure_bus_location "$PROJECT_DIR/client/nginx-client.conf"
+remove_hysteria_mount "$PROJECT_DIR/docker-compose.yml"
 
 #################################
 # REBUILD BACKEND
