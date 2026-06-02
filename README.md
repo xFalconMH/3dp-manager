@@ -2,7 +2,7 @@
 
 <p><img src="https://denpiligrim.ru/storage/images/3dp-manager.png" alt="3dp-manager preview"></p>
 
-![Version](https://img.shields.io/badge/version-2.2.0-blue.svg) ![Downloads](https://img.shields.io/badge/downloads-5.1k-blue) [![License](https://img.shields.io/badge/license-GPL%20V3-blue.svg?longCache=true)](https://www.gnu.org/licenses/gpl-3.0) [![Telegram](https://img.shields.io/badge/Telegram-26A5E4?style=flat&logo=telegram&logoColor=white)](https://t.me/denpiligrim_web) [![YouTube Channel Subscribers](https://img.shields.io/youtube/channel/subscribers/UCOv2tFFYDY4mXOM60PVz8zw)](https://www.youtube.com/@denpiligrim)
+![Version](https://img.shields.io/badge/version-2.2.0-blue.svg) ![Downloads](https://img.shields.io/badge/downloads-5.6k-blue) [![License](https://img.shields.io/badge/license-GPL%20V3-blue.svg?longCache=true)](https://www.gnu.org/licenses/gpl-3.0) [![Telegram](https://img.shields.io/badge/Telegram-26A5E4?style=flat&logo=telegram&logoColor=white)](https://t.me/denpiligrim_web) [![YouTube Channel Subscribers](https://img.shields.io/youtube/channel/subscribers/UCOv2tFFYDY4mXOM60PVz8zw)](https://www.youtube.com/@denpiligrim)
 
 # 3DP-MANAGER
 
@@ -11,7 +11,7 @@
 **Поддержать проект**
 
 - Банковским переводом:
-	- :credit_card: Карта МИР: `2204320436318077`
+	- :credit_card: Карта МИР: [finance.ozon.ru](https://finance.ozon.ru/apps/sbp/ozonbankpay/019e46e5-c08d-734a-a056-6b340969760d)
 	- :credit_card: Карта MasterCard: `5395452209474530`
 - На электронный кошелек:
 	- :moneybag: ЮМоney: `4100116897060652`
